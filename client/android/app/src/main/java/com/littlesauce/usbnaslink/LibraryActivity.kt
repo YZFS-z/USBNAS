@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -111,21 +112,14 @@ class LibraryActivity : AppCompatActivity() {
         })
         top.addView(titleBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        // 顶栏两个按钮走 Palette.ghost：自绘深色圆角底 + 主色字。
-        // 用裸 Button 会套 Material 默认背景，在深色页面上是 #D6D7D7 灰块，
-        // 跟播放页的按钮完全不像一家人（这就是「UI 不统一」的根因）。
+        // 顶栏只剩「网页」一个入口。
+        // 「设置」按钮原来在顶栏、点了弹窗；现在它和 NAS 的站点/目录配置合并成
+        // 第四个页签「管理设置」，顶栏再放一个同名的按钮就变成两个「设置」——
+        // 这正是用户报的「按钮重名」问题。见 buildManage()。
         val btnWeb = Palette.ghost(this, "网页", Palette.ACCENT_SOFT).apply {
             setOnClickListener { openWeb() }
         }
         top.addView(btnWeb)
-
-        // 「设置」：自动更新开关与手动检查都挂在这里（详见 showSettings）。
-        // 放在顶栏而不是藏进菜单，是因为它是「App 自己的事」，
-        // 和「这台 NAS 里有什么」明显不是一路。
-        val btnSet = Palette.ghost(this, "设置", Palette.DIM).apply {
-            setOnClickListener { showSettings() }
-        }
-        top.addView(btnSet)
         root.addView(top)
 
         // --- 页签 ---
@@ -193,9 +187,9 @@ class LibraryActivity : AppCompatActivity() {
         musicHost.visibility = if (idx == 1) View.VISIBLE else View.GONE
         bookHost.visibility = if (idx == 2) View.VISIBLE else View.GONE
         manageHost.visibility = if (idx == 3) View.VISIBLE else View.GONE
-        // 设置页首次进入才建视图：里面要读 prefs、挂监听，没必要冷启动就做
+        // 设置页首次进入才建视图：里面要读 prefs、挂监听、还要请求服务端
         if (idx == 3 && manageHost.childCount == 0) {
-            manageHost.addView(ApkUpdater.settingsView(this))
+            buildManage()
         }
         for ((i, t) in tabViews.withIndex()) Palette.paintTab(t, i == idx)
         updateHint()
@@ -207,7 +201,7 @@ class LibraryActivity : AppCompatActivity() {
         val b = blib
         hint.text = when {
             // 设置页不显示媒体统计：那一行的句式和「影视 N 部」完全不同族
-            currentTab == 3 -> "App 自身的设置，与这台 NAS 里有什么无关"
+            currentTab == 3 -> "App 自身的设置 + 这台 NAS 的站点与目录配置"
             v == null && m == null && b == null -> "加载中…"
             currentTab == 0 -> {
                 val groups = v?.groups?.size ?: 0
@@ -694,22 +688,208 @@ class LibraryActivity : AppCompatActivity() {
         startActivity(i)
     }
 
-    /**
-     * 设置：只有自动更新这一件 App 自己的事。
-     *
-     * 不新开 Activity：里面就一个开关和两个按钮，为它再写一个页面、
-     * 再挂一次 Manifest，代价比收益大。对话框用 ScrollView 包着，
-     * 小屏横屏时也能滚到底部的「立即检查」。
-     */
-    /**
-     * 设置：从「顶栏弹窗」改成第四个页签「管理设置」。
-     *
-     * 原来的对话框只有「关闭」一个按钮、内容还跟媒体列表共用一屏，改开关时
-     * 底下几万条曲目还在加载。现在它和桌面端「管理设置」页签对齐：进页签才
-     * 创建视图，切走就只换可见性，滚动位置自然保留。
-     */
-    private fun showSettings() {
-        selectTab(3)
+    /** 第四个页签「管理设置」：先建 App 自身设置（同步、不联网），NAS 全局配置异步填 */
+    private fun buildManage() {
+        manageHost.removeAllViews()
+        // App 自己的设置（自动更新）是本地轻活，直接建；NAS 的站点名/目录要走网络，
+        // 交给 loadManage() 异步填 —— 不能让一个慢请求把整个页签卡成空白
+        manageHost.addView(ApkUpdater.settingsView(this))
+        manageHost.addView(nasSettingsCard())
+        loadManage()
+    }
+
+    // ---------------------------------------------------------------- 管理设置
+
+    /** 服务端全局配置的状态（站点名称 / 音乐 / 影视 / 图书目录） */
+    private var adminState: Admin.State? = null
+    private var adminCard: LinearLayout? = null
+    private var titleBox: EditText? = null
+    private var musicTree: DirTree? = null
+    private var videoTree: DirTree? = null
+    private var bookTree: DirTree? = null
+    private val adminIo = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "usbnas-admin").apply { isDaemon = true }
+    }
+
+    private fun nasSettingsCard(): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(Palette.cardTitle(this, "这台 NAS").apply {
+            setPadding(dp(16), dp(6), dp(16), 0)
+        })
+        box.addView(Palette.note(this,
+            "站点名称与三个库的目录是全局配置，存在服务端，所有客户端共用；改它需要管理员账号。",
+            Palette.DIM2).apply { setPadding(dp(16), 0, dp(16), dp(4)) })
+        adminCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), 0, dp(16), dp(20))
+        }
+        box.addView(adminCard)
+        return box
+    }
+
+    private fun loadManage() {
+        val card = adminCard ?: return
+        if (baseUrl.isEmpty()) return
+        val base = baseUrl
+        val ck = sid
+        adminIo.execute {
+            val st = try {
+                Admin.fetch(base, ck, 9000)
+            } catch (t: Throwable) {
+                Admin.State().apply { ok = false; error = "${t.message}" }
+            }
+            ui.post {
+                adminState = st
+                fillManage(st)
+            }
+        }
+    }
+
+    private fun fillManage(st: Admin.State) {
+        val card = adminCard ?: return
+        card.removeAllViews()
+        titleBox = null
+        musicTree = null
+        videoTree = null
+        bookTree = null
+
+        if (!st.ok) {
+            card.addView(Palette.note(this,
+                "读不到服务端配置：${st.error ?: "没有响应"}（多半是它还不支持 /_admin/api）",
+                Palette.WARN_HI))
+            card.addView(Palette.outline(this, "重试").apply { setOnClickListener { loadManage() } },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38))
+                    .apply { topMargin = dp(10) })
+            return
+        }
+        if (!st.admin) {
+            card.addView(Palette.note(this, if (st.logged)
+                "当前账号「${st.who}」是${st.levelName}，改设置需要管理员。"
+            else
+                "还没登录，或者登录已过期；改设置需要管理员账号。", Palette.DIM))
+            card.addView(Palette.solid(this, if (st.logged) "换管理员账号" else "去网页端登录").apply {
+                setOnClickListener {
+                    startActivity(BrowseActivity.intent(this@LibraryActivity, baseUrl, null))
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46))
+                .apply { topMargin = dp(10) })
+            // 非管理员也要能看见当前配置是什么（只读体面地显示出来）
+            if (!st.logged) return
+        } else {
+            card.addView(Palette.note(this, "管理员：${st.who}（${st.levelName}）", Palette.OK))
+        }
+
+        val editable = st.admin
+        titleBox = Palette.field(this, "显示在浏览器标题栏和响应头里").apply {
+            setText(st.title ?: "")
+            isEnabled = editable
+        }
+        card.addView(manageSection("站点名称",
+            "最多 24 个字符；留空会用默认的「一只肥鼠的NAS」。",
+            titleBox, null, editable) {
+            save("title", "站点名称", titleBox?.text?.toString() ?: "")
+        })
+
+        musicTree = DirTree(this).apply { setPaths(st.musicDirs ?: emptyList()) }
+        card.addView(manageSection("音乐目录",
+            "客户端播放器只在这些目录里找歌。点方框勾选、点文字展开。",
+            null, musicTree, editable) {
+            save("music", "音乐目录", musicTree?.checkedPaths()?.joinToString("\n") ?: "")
+        })
+        musicTree!!.rebuild(st.choices ?: emptyList(), st.musicDirs ?: emptyList())
+
+        videoTree = DirTree(this).apply { setPaths(st.videoDirs ?: emptyList()) }
+        card.addView(manageSection("影视目录",
+            "电影和剧可以分在不同盘里，客户端按目录分块显示；海报和 .nfo 从视频同目录读。",
+            null, videoTree, editable) {
+            save("video", "影视目录", videoTree?.checkedPaths()?.joinToString("\n") ?: "")
+        })
+        videoTree!!.rebuild(st.choices ?: emptyList(), st.videoDirs ?: emptyList())
+
+        bookTree = DirTree(this).apply { setPaths(st.bookDirs ?: emptyList()) }
+        card.addView(manageSection("图书目录",
+            "「图书」页只显示这里的书；不配就是空书库（不会去扫全盘找 txt）。",
+            null, bookTree, editable) {
+            save("book", "图书目录", bookTree?.checkedPaths()?.joinToString("\n") ?: "")
+        })
+        bookTree!!.rebuild(st.choices ?: emptyList(), st.bookDirs ?: emptyList())
+    }
+
+    /** 一段配置：标题 + 说明 +（输入框 | 目录树）+ 保存按钮 */
+    private fun manageSection(
+        title: String,
+        hintText: String,
+        editor: View?,
+        tree: DirTree?,
+        editable: Boolean,
+        onSave: () -> Unit
+    ): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(16), 0, dp(8))
+        }
+        box.addView(TextView(this).apply {
+            text = title
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        box.addView(Palette.note(this, hintText))
+        if (editor != null) {
+            box.addView(editor, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        if (tree != null) {
+            // 不要把树塞进内层 ScrollView：外层已有滚动容器，嵌套同向滚动在测量时
+            // 拿不到高度，树会渲染成 0 高度（连「目录树 · 已选 N 个」都看不见）。
+            box.addView(tree.component(), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) })
+            box.addView(Palette.note(this, "已选路径（保存的就是这里的每一行，也可以直接手改）"))
+            box.addView(tree.editor(), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        if (editable) {
+            box.addView(Palette.solid(this, "保存$title", Palette.BTN, Palette.FG2).apply {
+                setOnClickListener { onSave() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42))
+                .apply { topMargin = dp(10) })
+        }
+        return box
+    }
+
+    private fun save(action: String, label: String, value: String) {
+        if (adminState?.admin != true) {
+            Toast.makeText(this, "当前会话不是管理员", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val base = baseUrl
+        val ck = sid
+        val dirs = value.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        adminIo.execute {
+            val r = try {
+                when (action) {
+                    "title" -> Admin.saveTitle(base, ck, value, 9000)
+                    "music" -> Admin.saveMusicDirs(base, ck, dirs, 9000)
+                    "book" -> Admin.saveBookDirs(base, ck, dirs, 9000)
+                    else -> Admin.saveVideoDirs(base, ck, dirs, 9000)
+                }
+            } catch (t: Throwable) {
+                Admin.Saved().apply { ok = false; error = "${t.message}" }
+            }
+            ui.post {
+                Toast.makeText(
+                    this@LibraryActivity,
+                    if (r.ok) "$label 已保存（${r.msg ?: "已生效"}）"
+                    else "$label 没保存：${r.error ?: "未知错误"}",
+                    if (r.ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                ).show()
+                if (r.ok) {
+                    loadManage()
+                    reload()
+                }
+            }
+        }
     }
 
     private fun copy(s: String) {
@@ -756,6 +936,7 @@ class LibraryActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         io.shutdownNow()
+        adminIo.shutdownNow()
         super.onDestroy()
     }
 }

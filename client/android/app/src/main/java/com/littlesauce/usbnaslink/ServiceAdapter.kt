@@ -1,6 +1,5 @@
 package com.littlesauce.usbnaslink
 
-import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -56,12 +55,14 @@ class ServiceAdapter(
         if (!si.disksText.isNullOrEmpty()) bits.add(si.disksText)
         holder.detail.text = bits.joinToString(" · ")
 
+        // 状态点：已连接绿 / 需登录蓝 / 未知灰（色值统一走 Palette，别再散字面量）
         val dot = when {
-            si.key() == connectedKey() -> Color.parseColor("#22A45D")
-            si.needLogin -> Color.parseColor("#2F6FED")
-            else -> Color.parseColor("#C9CDD4")
+            si.key() == connectedKey() -> Palette.OK
+            si.needLogin -> Palette.ACCENT
+            else -> Palette.DIM
         }
-        holder.dot.setBackgroundColor(dot)
+        val ctx = holder.dot.context
+        holder.dot.background = Palette.pill(ctx, dot, 7)
         holder.itemView.setOnClickListener { onPick(si) }
     }
 

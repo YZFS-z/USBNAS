@@ -1,20 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  服务列表的一行。深色卡片样式（同 Palette.CARD / LINE）：
+  以前是白底 #101010 黑字，和媒体库的深色完全两个世界。
+  dot 颜色由 ServiceAdapter 按「已连接 / 需登录 / 未知」现场着色。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="?android:attr/selectableItemBackground"
+    android:layout_marginStart="16dp"
+    android:layout_marginTop="5dp"
+    android:layout_marginEnd="16dp"
+    android:layout_marginBottom="5dp"
+    android:background="@drawable/bg_card"
     android:orientation="horizontal"
-    android:paddingStart="24dp"
+    android:paddingStart="16dp"
     android:paddingTop="14dp"
-    android:paddingEnd="24dp"
+    android:paddingEnd="16dp"
     android:paddingBottom="14dp">
 
-    <!-- 左侧状态点：有 sid 变绿，需要登录变蓝，未知灰。纯代码着色，省一张图 -->
     <View
         android:id="@+id/dot"
-        android:layout_width="8dp"
-        android:layout_height="8dp"
+        android:layout_width="7dp"
+        android:layout_height="7dp"
         android:layout_gravity="center_vertical"
         android:layout_marginEnd="14dp" />
 
@@ -30,7 +38,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#101010"
+            android:textColor="#E6E9EF"
             android:textSize="16sp"
             android:textStyle="bold"
             tools:text="一只肥鼠的NAS" />
@@ -39,11 +47,20 @@
             android:id="@+id/detail"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
+            android:layout_marginTop="4dp"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#8A8A8A"
+            android:textColor="#7D8590"
             android:textSize="13sp"
             tools:text="192.168.1.10:8080 · 12ms" />
     </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:layout_marginStart="10dp"
+        android:text="›"
+        android:textColor="#5C6470"
+        android:textSize="18sp" />
 </LinearLayout>

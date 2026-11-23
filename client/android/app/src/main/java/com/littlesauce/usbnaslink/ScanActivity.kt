@@ -46,8 +46,9 @@ class ScanActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_scan)
-        // 扫描页底是 #FFFFFF 白底：系统栏透明后要配深色图标（tintBars 按亮度自动判）
-        Immersive.tintBars(this, 0xFFFFFFFF.toInt())
+        // 扫描页现在是深色底 #0F141A（同 Palette.BG）：系统栏透明后看到的永远是它，
+        // tintBars 会按亮度自动选浅色图标。
+        Immersive.tintBars(this, Palette.BG)
         prefs = Prefs(this)
 
         list = findViewById(R.id.list)
@@ -64,24 +65,9 @@ class ScanActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.btnRescan).setOnClickListener { startScan(true) }
         findViewById<View>(R.id.btnManual).setOnClickListener { askManual() }
-        findViewById<View>(R.id.btnLibrary).setOnClickListener {
-            val last = prefs.lastUrl
-            if (last == null) {
-                Toast.makeText(this, "先连一台服务器", Toast.LENGTH_SHORT).show()
-            } else {
-                openLibrary(last, prefs.lastName)
-            }
-        }
-        // 管理设置：进来先连服务端要一份 admin 状态，不是管理员就显示锁态。
-        // 不在这一层做权限判断 —— 判断只在服务端做，客户端只负责照着显示。
-        findViewById<View>(R.id.btnAdmin).setOnClickListener {
-            val last = prefs.lastUrl
-            if (last == null) {
-                Toast.makeText(this, "先连一台服务器", Toast.LENGTH_SHORT).show()
-            } else {
-                startActivity(AdminActivity.intent(this, last, prefs.sid))
-            }
-        }
+        // 「媒体库」与「管理设置」两个按钮已删：点列表就是进媒体库，
+        // 管理设置在媒体库的第四个页签里（站点名称/音乐/影视/图书目录 + App 自身设置），
+        // 两处各留一份入口只会让同一个东西看起来像两个东西。
 
         askPermissionsThenStart()
     }

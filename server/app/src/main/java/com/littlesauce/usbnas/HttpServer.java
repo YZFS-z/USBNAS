@@ -5270,6 +5270,13 @@ public class HttpServer {
             sb.append("<span class='ul ul0'>只读</span>");
             sb.append("<a class='lo' href='/_login'>登录</a>");
         }
+        // 管理入口。加在身份栏里而不是页脚，是因为页脚在几千行的文件列表里
+        // 要滚很久才看得到；而「改站点名 / 指目录」这件事只有管理员会做，
+        // 放在自己名字旁边最顺手。文案统一叫「管理设置」，与客户端那个页签同名 ——
+        // 之前客户端叫「设置」、网页叫「管理」，同一件事两个名字，用户会以为是两处。
+        if (req.user != null && req.user.level >= Users.LEVEL_ADMIN) {
+            sb.append("<a class='lo adm' href='/_admin'>管理设置</a>");
+        }
         // 主题按钮回到这一排里（跟在「登录」后面）。
         //
         // 之前它被挪到 header 下方独立一行，原因是手机上 匿名+只读+登录+日间
@@ -6928,6 +6935,11 @@ public class HttpServer {
                     + "body.light .lo{background:#f0f2f5;color:#0b64c8;"
                     + "border:1px solid #d3dae3}"
                     + "body.light .lo:hover{background:#e3edfa;border-color:#a8c8ea}"
+                    // 管理入口在日间是「描边胶囊」，底要和页面同色才不显重
+                    + "body.light .lo.adm{background:#fafbfc;color:#57606a;"
+                    + "border:1px solid #d3dae3}"
+                    + "body.light .lo.adm:hover{background:#eef3fb;color:#0b64c8;"
+                    + "border-color:#a8c8ea}"
                     + "body.light .okbar{background:#e7f6ec;color:#1a7f37;"
                     + "border-color:#b7dcc3}"
                     + "body.light .errbar,body.light .err{background:#fde8ea;"
@@ -7054,6 +7066,10 @@ public class HttpServer {
                     + "body.ink .lo{background:#d6d6d6;color:#3a3a3a;"
                     + "border:1px solid #c6c6c6;text-decoration:none}"
                     + "body.ink .lo:hover{background:#cccccc;color:#232323}"
+                    // 墨屏不留色相：管理入口只比「退出」浅一档
+                    + "body.ink .lo.adm{background:#e4e4e4;color:#4a4a4a;"
+                    + "border:1px solid #c6c6c6}"
+                    + "body.ink .lo.adm:hover{background:#d8d8d8;color:#232323}"
                     // 提示条也不上色，只靠灰度深浅区分成功/失败
                     + "body.ink .okbar{background:#dcdcdc;color:#373737;"
                     + "border-color:#c6c6c6}"
@@ -7568,6 +7584,11 @@ public class HttpServer {
                     + "border:1px solid #3a3323;color:#d6b45a;cursor:default}"
                     + ".lo{font-size:12px;color:#5aa9ff;text-decoration:none;"
                     + "padding:2px 8px;border-radius:6px;background:#1b222c}"
+                    // 管理入口：比「退出」更轻一档（描边而不是实底），
+                    // 免得它比「退出」还抢眼 —— 那是个低频动作
+                    + ".lo.adm{background:transparent;border:1px solid #2a323d;"
+                    + "color:#9aa4b2}"
+                    + ".lo.adm:hover{color:#e6e9ef;border-color:#2f3a48}"
                     // 主题开关：和「退出」同一枚小胶囊，紧挨着放，不打乱身份栏的节奏
                     + ".themebtn{font:inherit;font-size:12px;cursor:pointer;"
                     + "padding:3px 10px;border-radius:6px;border:1px solid #2a323d;"
