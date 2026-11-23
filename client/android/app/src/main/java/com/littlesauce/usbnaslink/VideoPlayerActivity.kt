@@ -238,11 +238,17 @@ class VideoPlayerActivity : Activity() {
         Button(this).apply {
             this.text = text
             textSize = 12f
-            setTextColor(Color.parseColor("#E6E9EF"))
-            setBackgroundColor(Color.parseColor("#1B222C"))
+            setTextColor(Palette.FG)
+            // 视频控制条压在画面上，背景必须是不透明的 Palette.BTN，
+            // 否则半透明会让字幕和画面颜色透过来。
+            backgroundTintList = null
+            stateListAnimator = null
             setPadding(dp(12), dp(6), dp(12), dp(6))
             minWidth = 0
             minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            background = Palette.round(this@VideoPlayerActivity, Palette.BTN, 8f)
             setOnClickListener { onClick(it) }
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)

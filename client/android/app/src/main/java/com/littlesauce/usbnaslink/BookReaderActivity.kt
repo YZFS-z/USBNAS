@@ -253,16 +253,25 @@ class BookReaderActivity : Activity() {
         }
         row.addView(Button(this).apply {
             text = "在 App 里打开（PDFium）"
-            setTextColor(Color.parseColor("#E6E9EF"))
-            setBackgroundColor(Color.parseColor("#2F80ED"))
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            // 主色实心：这是这一屏唯一推荐的主动作
+            backgroundTintList = null
+            stateListAnimator = null
+            background = Palette.round(this@BookReaderActivity, Palette.ACCENT, 9f)
             setOnClickListener { openPdf() }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            rightMargin = dp(8)
         })
         row.addView(Button(this).apply {
             text = "用设备上的 PDF 阅读器打开"
-            setTextColor(Color.parseColor("#E6E9EF"))
-            setBackgroundColor(Color.parseColor("#1B222C"))
+            isAllCaps = false
+            setTextColor(Palette.FG)
+            backgroundTintList = null
+            stateListAnimator = null
+            background = Palette.round(this@BookReaderActivity, Palette.BTN, 9f, Palette.LINE, 1f)
             setOnClickListener { openWithOtherApp() }
-        })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         pdfBar = row
         // 插到滚动区之前：root 的子序是 head / spinner / scroll / bottom，
         // 索引 2 正好是 scroll 前面，这样按钮在正文上方而不是被正文挤出去。

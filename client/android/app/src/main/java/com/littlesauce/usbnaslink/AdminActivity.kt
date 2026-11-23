@@ -198,8 +198,11 @@ class AdminActivity : android.app.Activity() {
             ))
             val b = Button(this).apply {
                 text = if (st.logged) "换管理员账号" else "去网页端登录"
+                isAllCaps = false
                 setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor("#2F6FED"))
+                backgroundTintList = null
+                stateListAnimator = null
+                background = Palette.round(this@AdminActivity, Palette.ACCENT, 9f)
                 setOnClickListener {
                     startActivity(BrowseActivity.intent(this@AdminActivity, baseUrl, null))
                 }
@@ -350,8 +353,11 @@ class AdminActivity : android.app.Activity() {
         val btn = Button(this).apply {
             text = "保存$title"
             textSize = 14f
+            isAllCaps = false
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#2F6FED"))
+            backgroundTintList = null
+            stateListAnimator = null
+            background = Palette.round(this@AdminActivity, Palette.ACCENT, 9f)
             setOnClickListener { onSave() }
         }
         box.addView(btn, LinearLayout.LayoutParams(

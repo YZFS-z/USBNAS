@@ -115,7 +115,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF0F141A.toInt())
+            setBackgroundColor(Palette.BG)
             setPadding(dp(20), dp(24), dp(20), dp(20))
         }
 
@@ -143,7 +143,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         disc = DiscView(this)
 
         lyric = TextView(this).apply {
-            setTextColor(0xFF9AA4B2.toInt())
+            setTextColor(Palette.DIM)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
             gravity = Gravity.CENTER
             setLineSpacing(dp(8).toFloat(), 1f)
@@ -152,7 +152,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         }
 
         timeText = TextView(this).apply {
-            setTextColor(0xFF6B7480.toInt())
+            setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             gravity = Gravity.CENTER
             text = "00:00 / 00:00"
@@ -173,7 +173,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
 
         val hint = TextView(this).apply {
             text = "拖动进度条可跳转（部分格式解不了就自动跳下一首）"
-            setTextColor(0xFF5C6470.toInt())
+            setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             gravity = Gravity.CENTER
             setPadding(0, dp(2), 0, dp(10))
@@ -214,7 +214,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 一行状态尾巴：既方便用户看「现在是不是在唱」，也让自动化脚本
         // 能靠这行文字判断播放状态（播放页每 200ms 刷一次，uiautomator 等不到 idle）
         lyricTag = TextView(this).apply {
-            setTextColor(0xFF5C6470.toInt())
+            setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             gravity = Gravity.CENTER
             setPadding(0, dp(10), 0, 0)
@@ -365,14 +365,14 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     }
 
     private fun titleStyle(t: TextView) {
-        t.setTextColor(0xFFE6E9EF.toInt())
+        t.setTextColor(Palette.FG)
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21f)
         t.setTypeface(t.typeface, android.graphics.Typeface.BOLD)
         t.maxLines = 2
     }
 
     private fun subStyle(t: TextView) {
-        t.setTextColor(0xFF7D8590.toInt())
+        t.setTextColor(Palette.DIM2)
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         t.setPadding(0, dp(4), 0, 0)
         t.maxLines = 1
@@ -420,8 +420,16 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         text = label
         isAllCaps = false
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-        setTextColor(0xFFD8DEE6.toInt())
-        setBackgroundColor(0xFF1D2C3D.toInt())
+        setTextColor(Palette.FG2)
+        // setBackgroundColor 会把 Material 背景整个换成方角纯色；
+        // 走 Palette.round 才有圆角，且与媒体库顶栏按钮同一套色。
+        backgroundTintList = null
+        stateListAnimator = null
+        minWidth = 0
+        minimumWidth = 0
+        minHeight = 0
+        minimumHeight = 0
+        background = Palette.round(this@PlayerActivity, Palette.BTN, 9f)
         setOnClickListener { onClick() }
     }
 

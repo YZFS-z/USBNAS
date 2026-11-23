@@ -57,8 +57,12 @@ class LibraryActivity : AppCompatActivity() {
     private lateinit var videoHost: LinearLayout
     private lateinit var musicHost: LinearLayout
     private lateinit var bookHost: LinearLayout
+    private lateinit var manageHost: LinearLayout
     private lateinit var hint: TextView
     private lateinit var spinner: ProgressBar
+
+    /** 三个页签按钮，切页时只刷它们的选中态（不重建视图） */
+    private val tabViews = ArrayList<TextView>()
 
     private var vlib: VideoLib.Lib? = null
     private var mlib: Music.Lib? = null
@@ -84,7 +88,7 @@ class LibraryActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF0F141A.toInt())
+            setBackgroundColor(Palette.BG)
         }
 
         // --- 顶栏 ---
@@ -96,48 +100,48 @@ class LibraryActivity : AppCompatActivity() {
         val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         titleBox.addView(TextView(this).apply {
             text = intent.getStringExtra(EXTRA_NAME) ?: "媒体库"
-            setTextColor(0xFFE6E9EF.toInt())
+            setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         titleBox.addView(TextView(this).apply {
             text = baseUrl
-            setTextColor(0xFF5AA9FF.toInt())
+            setTextColor(Palette.ACCENT_HI)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         })
         top.addView(titleBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        val btnWeb = Button(this).apply {
-            text = "网页"
-            isAllCaps = false
-            setTextColor(0xFF8AB4F8.toInt())
+        // 顶栏两个按钮走 Palette.ghost：自绘深色圆角底 + 主色字。
+        // 用裸 Button 会套 Material 默认背景，在深色页面上是 #D6D7D7 灰块，
+        // 跟播放页的按钮完全不像一家人（这就是「UI 不统一」的根因）。
+        val btnWeb = Palette.ghost(this, "网页", Palette.ACCENT_SOFT).apply {
             setOnClickListener { openWeb() }
         }
         top.addView(btnWeb)
 
-        // 「设置」：自动更新开关与手动检查都挂在这里。
+        // 「设置」：自动更新开关与手动检查都挂在这里（详见 showSettings）。
         // 放在顶栏而不是藏进菜单，是因为它是「App 自己的事」，
         // 和「这台 NAS 里有什么」明显不是一路。
-        val btnSet = Button(this).apply {
-            text = "设置"
-            isAllCaps = false
-            setTextColor(0xFF9AA4B2.toInt())
+        val btnSet = Palette.ghost(this, "设置", Palette.DIM).apply {
             setOnClickListener { showSettings() }
         }
         top.addView(btnSet)
         root.addView(top)
 
         // --- 页签 ---
+        // 选中态是「主色淡底 + 主色字 + 主色描边」，未选中是「近底灰 + 弱字」。
+        // 之前三个页签只换文字、不换底色，屏幕上一排灰块，看不出在哪一页。
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(16), 0, dp(16), dp(8))
         }
-        val tabVideo = tabButton("影视", 0)
-        val tabMusic = tabButton("音乐", 1)
-        val tabBook = tabButton("图书", 2)
-        tabs.addView(tabVideo, LinearLayout.LayoutParams(0, dp(40), 1f))
-        tabs.addView(tabMusic, LinearLayout.LayoutParams(0, dp(40), 1f))
-        tabs.addView(tabBook, LinearLayout.LayoutParams(0, dp(40), 1f))
+        for ((i, label) in listOf("影视", "音乐", "图书", "管理设置").withIndex()) {
+            val t = Palette.tab(this, label, false).apply { setOnClickListener { selectTab(i) } }
+            tabViews.add(t)
+            tabs.addView(t, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+                if (i > 0) leftMargin = dp(8)
+            })
+        }
         root.addView(tabs)
 
         spinner = ProgressBar(this).apply {
@@ -148,7 +152,7 @@ class LibraryActivity : AppCompatActivity() {
         root.addView(spinner)
 
         hint = TextView(this).apply {
-            setTextColor(0xFF7D8590.toInt())
+            setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(16), dp(6), dp(16), dp(6))
             text = "加载中…"
@@ -163,15 +167,17 @@ class LibraryActivity : AppCompatActivity() {
         videoHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         musicHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         bookHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        manageHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         host.addView(videoHost)
         host.addView(musicHost)
         host.addView(bookHost)
+        host.addView(manageHost)
         scroll.addView(host)
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         setContentView(root)
         // 状态栏/手势栏透明，看到的永远是 root 的 #0F141A（详见 Immersive.tintBars）
-        Immersive.tintBars(this, 0xFF0F141A.toInt())
+        Immersive.tintBars(this, Palette.BG)
         selectTab(0)
         reload()
 
@@ -180,19 +186,18 @@ class LibraryActivity : AppCompatActivity() {
         ApkUpdater.checkOnStart(this, false)
     }
 
-    private fun tabButton(label: String, idx: Int) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        setOnClickListener { selectTab(idx) }
-    }
-
     private fun selectTab(idx: Int) {
         currentTab = idx
-        // 页签不做真 TabHost：三个容器同时存在，只切可见性，来回切不重排
+        // 页签不做真 TabHost：几个容器同时存在，只切可见性，来回切不重排
         videoHost.visibility = if (idx == 0) View.VISIBLE else View.GONE
         musicHost.visibility = if (idx == 1) View.VISIBLE else View.GONE
         bookHost.visibility = if (idx == 2) View.VISIBLE else View.GONE
+        manageHost.visibility = if (idx == 3) View.VISIBLE else View.GONE
+        // 设置页首次进入才建视图：里面要读 prefs、挂监听，没必要冷启动就做
+        if (idx == 3 && manageHost.childCount == 0) {
+            manageHost.addView(ApkUpdater.settingsView(this))
+        }
+        for ((i, t) in tabViews.withIndex()) Palette.paintTab(t, i == idx)
         updateHint()
     }
 
@@ -201,6 +206,8 @@ class LibraryActivity : AppCompatActivity() {
         val m = mlib
         val b = blib
         hint.text = when {
+            // 设置页不显示媒体统计：那一行的句式和「影视 N 部」完全不同族
+            currentTab == 3 -> "App 自身的设置，与这台 NAS 里有什么无关"
             v == null && m == null && b == null -> "加载中…"
             currentTab == 0 -> {
                 val groups = v?.groups?.size ?: 0
@@ -297,13 +304,13 @@ class LibraryActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(150))
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(0xFF161B22.toInt())
+            setBackgroundColor(Palette.CARD)
         }
         box.addView(img)
 
         val nm = TextView(this).apply {
             text = if (v.title.isNullOrEmpty()) v.name else v.title
-            setTextColor(0xFFD8DEE6.toInt())
+            setTextColor(Palette.FG2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             maxLines = 2
             setPadding(0, dp(5), 0, 0)
@@ -313,7 +320,7 @@ class LibraryActivity : AppCompatActivity() {
         val tag = if (v.isTv) v.tag() else (v.mtime.let { "" })
         val sub = TextView(this).apply {
             text = if (v.isTv) v.tag() else folderName(v.dir)
-            setTextColor(0xFF6B7480.toInt())
+            setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             maxLines = 1
         }
@@ -325,7 +332,7 @@ class LibraryActivity : AppCompatActivity() {
 
     private fun videoRow(v: Video) = TextView(this).apply {
         text = "· ${if (v.title.isNullOrEmpty()) v.name else v.title}"
-        setTextColor(0xFFD8DEE6.toInt())
+        setTextColor(Palette.FG2)
         setPadding(dp(16), dp(6), dp(16), dp(6))
         isClickable = true
         setOnClickListener { openVideo(v) }
@@ -435,19 +442,19 @@ class LibraryActivity : AppCompatActivity() {
             setOnClickListener { toggle() }
             addView(TextView(this@LibraryActivity).apply {
                 text = if (open) "▾" else "▸"
-                setTextColor(0xFF5AA9FF.toInt())
+                setTextColor(Palette.ACCENT_HI)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setPadding(0, 0, dp(8), 0)
             })
             addView(TextView(this@LibraryActivity).apply {
                 text = b.name
-                setTextColor(0xFF5AA9FF.toInt())
+                setTextColor(Palette.ACCENT_HI)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 maxLines = 1
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(TextView(this@LibraryActivity).apply {
                 text = b.summary()
-                setTextColor(0xFF6B7480.toInt())
+                setTextColor(Palette.DIM2)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             })
         }
@@ -462,12 +469,21 @@ class LibraryActivity : AppCompatActivity() {
         val labels = arrayOf("平铺", "按歌手", "按专辑")
         for ((idx, label) in labels.withIndex()) {
             val on = musicView == idx
+            // 与顶部三页签同一套视觉：选中主色底、未选中 Palette.BTN，
+            // 都走自绘圆角，避免裸 Button 的 Material 灰块。
             val b = Button(this@LibraryActivity).apply {
                 text = label
                 isAllCaps = false
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setTextColor(if (on) 0xFFFFFFFF.toInt() else 0xFF9AA4B2.toInt())
-                setBackgroundColor(if (on) 0xFF2F6FED.toInt() else 0xFF1B222C.toInt())
+                setTextColor(if (on) 0xFFFFFFFF.toInt() else Palette.DIM)
+                backgroundTintList = null
+                stateListAnimator = null
+                minWidth = 0
+                minimumWidth = 0
+                minHeight = 0
+                minimumHeight = 0
+                background = Palette.round(this@LibraryActivity,
+                    if (on) Palette.ACCENT else Palette.BTN, 9f)
                 setOnClickListener {
                     musicView = idx
                     openedBuckets.clear()
@@ -484,9 +500,9 @@ class LibraryActivity : AppCompatActivity() {
             setSingleLine()
             hint = "搜歌手 / 专辑 / 歌名（共 $n 首）"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTextColor(0xFFD8DEE6.toInt())
-            setHintTextColor(0xFF5C6470.toInt())
-            setBackgroundColor(0xFF161B22.toInt())
+            setTextColor(Palette.FG2)
+            setHintTextColor(Palette.FAINT)
+            setBackgroundColor(Palette.CARD)
             setPadding(dp(10), dp(7), dp(10), dp(7))
             if (query.isNotEmpty()) setText(query)
             addTextChangedListener(object : android.text.TextWatcher {
@@ -517,14 +533,14 @@ class LibraryActivity : AppCompatActivity() {
         setBackgroundColor(Color.TRANSPARENT)
         addView(TextView(this@LibraryActivity).apply {
             text = "♪"
-            setTextColor(0xFF2F6FED.toInt())
+            setTextColor(Palette.ACCENT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setPadding(0, 0, dp(10), 0)
         })
         val col = LinearLayout(this@LibraryActivity).apply { orientation = LinearLayout.VERTICAL }
         col.addView(TextView(this@LibraryActivity).apply {
             text = t.displayTitle()
-            setTextColor(0xFFD8DEE6.toInt())
+            setTextColor(Palette.FG2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             maxLines = 1
         })
@@ -538,7 +554,7 @@ class LibraryActivity : AppCompatActivity() {
             bits.add(Music.humanSize(t.size))
             if (t.hasLyrics()) bits.add("有歌词")
             text = bits.joinToString("   ·  ")
-            setTextColor(0xFF6B7480.toInt())
+            setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             maxLines = 1
         })
@@ -609,20 +625,20 @@ class LibraryActivity : AppCompatActivity() {
         setBackgroundColor(Color.TRANSPARENT)
         addView(TextView(this@LibraryActivity).apply {
             text = "📖"
-            setTextColor(0xFF2F6FED.toInt())
+            setTextColor(Palette.ACCENT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setPadding(0, 0, dp(10), 0)
         })
         val col = LinearLayout(this@LibraryActivity).apply { orientation = LinearLayout.VERTICAL }
         col.addView(TextView(this@LibraryActivity).apply {
             text = if (b.title.isNullOrEmpty()) b.name else b.title
-            setTextColor(0xFFD8DEE6.toInt())
+            setTextColor(Palette.FG2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             maxLines = 1
         })
         col.addView(TextView(this@LibraryActivity).apply {
             text = b.tag() + "   " + Music.humanSize(b.size)
-            setTextColor(0xFF6B7480.toInt())
+            setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         })
         addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -652,13 +668,13 @@ class LibraryActivity : AppCompatActivity() {
         setPadding(dp(16), dp(14), dp(16), dp(6))
         addView(TextView(this@LibraryActivity).apply {
             text = "$title    $count"
-            setTextColor(0xFFE6E9EF.toInt())
+            setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         if (path.isNotEmpty()) addView(TextView(this@LibraryActivity).apply {
             text = path
-            setTextColor(0xFF5C6470.toInt())
+            setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             maxLines = 1
         })
@@ -666,7 +682,7 @@ class LibraryActivity : AppCompatActivity() {
 
     private fun msg(s: String) = TextView(this).apply {
         text = s
-        setTextColor(0xFF8A94A0.toInt())
+        setTextColor(Palette.DIM)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         setPadding(dp(18), dp(20), dp(18), dp(20))
     }
@@ -685,15 +701,15 @@ class LibraryActivity : AppCompatActivity() {
      * 再挂一次 Manifest，代价比收益大。对话框用 ScrollView 包着，
      * 小屏横屏时也能滚到底部的「立即检查」。
      */
+    /**
+     * 设置：从「顶栏弹窗」改成第四个页签「管理设置」。
+     *
+     * 原来的对话框只有「关闭」一个按钮、内容还跟媒体列表共用一屏，改开关时
+     * 底下几万条曲目还在加载。现在它和桌面端「管理设置」页签对齐：进页签才
+     * 创建视图，切走就只换可见性，滚动位置自然保留。
+     */
     private fun showSettings() {
-        val body = android.widget.ScrollView(this).apply {
-            addView(ApkUpdater.settingsView(this@LibraryActivity))
-        }
-        AlertDialog.Builder(this)
-            .setTitle("设置")
-            .setView(body)
-            .setPositiveButton("关闭", null)
-            .show()
+        selectTab(3)
     }
 
     private fun copy(s: String) {

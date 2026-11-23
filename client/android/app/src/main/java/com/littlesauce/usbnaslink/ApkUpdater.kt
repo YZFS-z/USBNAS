@@ -217,77 +217,161 @@ object ApkUpdater {
      * 直接返回 View 而不是弹对话框，是为了让它跟别的设置项并排躺在同一页里 ——
      * 用户找「怎么关掉联网」时不需要先猜它在哪个二级页面。
      */
+    /**
+     * 「管理设置」页签的全部内容：自动更新 + 版本信息 + 连接信息。
+     *
+     * 它不再是对话框，而是和「影视 / 音乐 / 图书」并列的第四个页签 ——
+     * 对话框只有一个「关闭」，改完开关想回来看结果得重开一次；
+     * 页签切走再切回，滚动位置和开关状态都还在（视图只建一次）。
+     *
+     * 所有颜色走 [Palette]，与播放页、图书页同一套，不再有裸 Button 的灰块。
+     */
     fun settingsView(activity: Activity): View {
         val prefs = Prefs(activity)
         val wrap = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(activity, 4), 0, 0)
+            setPadding(dp(activity, 16), dp(activity, 16), dp(activity, 16), dp(activity, 24))
+            setBackgroundColor(Palette.BG)
         }
+
+        // ---- 卡片：更新 ----
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 14))
+            background = Palette.round(activity, Palette.CARD, 12f, Palette.LINE, 1f)
+        }
+        card.addView(TextView(activity).apply {
+            text = "自动更新"
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
 
         val row = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(activity, 10), 0, 0)
         }
-        val title = TextView(activity).apply {
-            text = "自动检查新版本"
-            setTextColor(0xFFE6E9EF.toInt())
+        row.addView(TextView(activity).apply {
+            text = "联网检查新版本"
+            setTextColor(Palette.FG2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val box = CheckBox(activity).apply {
+        })
+        // CheckBox 的方块默认是主题色，这里强制刷成主蓝，避免和旁边文字两个调
+        row.addView(CheckBox(activity).apply {
             isChecked = prefs.autoUpdate
-            
             text = ""
+            buttonTintList = Palette.tint(Palette.ACCENT)
             setOnCheckedChangeListener { _, checked -> prefs.autoUpdate = checked }
-        }
-        row.addView(title)
-        row.addView(box)
-        wrap.addView(row)
+        })
+        card.addView(row)
 
-        wrap.addView(TextView(activity).apply {
+        card.addView(TextView(activity).apply {
             text = "当前 " + versionName(activity) +
                     "。打开后每次启动最多查一次 GitHub Release（间隔不少于 6 小时）；" +
                     "关掉就一个请求都不发。"
-            setTextColor(0xFF7D8590.toInt())
+            setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(0, dp(activity, 6), 0, dp(activity, 8))
+            setPadding(0, dp(activity, 8), 0, dp(activity, 12))
         })
 
         val ops = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        ops.addView(smallButton(activity, "立即检查").apply {
+        ops.addView(smallButton(activity, "立即检查", true).apply {
             setOnClickListener { checkOnStart(activity, true) }
         })
         val skip = prefs.skipVersion
         if (skip.isNotEmpty()) {
-            ops.addView(smallButton(activity, "不再跳过 " + skip).apply {
+            ops.addView(smallButton(activity, "不再跳过 " + skip, false).apply {
                 setOnClickListener {
-                    prefs.skipVersion = ("")
+                    prefs.skipVersion = ""
                     text = "已清除跳过标记"
                     isEnabled = false
                 }
             })
         }
-        wrap.addView(ops)
+        card.addView(ops)
+        wrap.addView(card, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(activity, 12)
+        })
+
+        // ---- 卡片：关于 ----
+        val about = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 14))
+            background = Palette.round(activity, Palette.CARD, 12f, Palette.LINE, 1f)
+        }
+        about.addView(TextView(activity).apply {
+            text = "关于"
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        val lines = listOf(
+            "版本" to versionName(activity),
+            "上次检查" to (if (prefs.lastUpdateCheck > 0)
+                android.text.format.DateFormat.format("MM-dd HH:mm", prefs.lastUpdateCheck).toString()
+            else "从未检查"),
+            "发布页" to PAGE
+        )
+        for ((k, v) in lines) {
+            val r = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(activity, 8), 0, 0)
+            }
+            r.addView(TextView(activity).apply {
+                text = k
+                setTextColor(Palette.DIM2)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                layoutParams = LinearLayout.LayoutParams(dp(activity, 76), ViewGroup.LayoutParams.WRAP_CONTENT)
+            })
+            r.addView(TextView(activity).apply {
+                text = v
+                setTextColor(Palette.FG2)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                if (k == "发布页") {
+                    setTextColor(Palette.ACCENT_HI)
+                    setOnClickListener { openUrl(activity, PAGE) }
+                }
+            })
+            about.addView(r)
+        }
+        about.addView(smallButton(activity, "打开发布页", false).apply {
+            setOnClickListener { openUrl(activity, PAGE) }
+            val lp = layoutParams as LinearLayout.LayoutParams
+            lp.topMargin = dp(activity, 12)
+        })
+        wrap.addView(about)
+
         return wrap
     }
 
-    private fun smallButton(activity: Activity, label: String): Button =
+    /**
+     * 卡片里的按钮。[primary] 为真用主色实心，否则用深灰描边 ——
+     * 一屏里最多一个实心按钮，视线才有落点。
+     */
+    private fun smallButton(activity: Activity, label: String, primary: Boolean): Button =
         Button(activity).apply {
             text = label
             isAllCaps = false
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(0xFFE6E9EF.toInt())
-            background = GradientDrawable().apply {
-                cornerRadius = dp(activity, 8).toFloat()
-                setColor(0xFF1B222C.toInt())
-                setStroke(dp(activity, 1), 0xFF232A34.toInt())
+            setTextColor(if (primary) 0xFFFFFFFF.toInt() else Palette.FG2)
+            backgroundTintList = null
+            stateListAnimator = null
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            background = if (primary) {
+                Palette.round(activity, Palette.ACCENT, 8f)
+            } else {
+                Palette.round(activity, Palette.BTN, 8f, Palette.LINE, 1f)
             }
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(activity, 36)
-            )
+            val lp = LinearLayout.LayoutParams(dp(activity, 108), dp(activity, 36))
             lp.rightMargin = dp(activity, 8)
             layoutParams = lp
-            minWidth = dp(activity, 96)
         }
 
     // ---------------------------------------------------------------- 工具
