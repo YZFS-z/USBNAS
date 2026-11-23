@@ -87,11 +87,14 @@ public final class Update {
     /**
      * 拉最新 release 并与 {@code currentVersion} 比较。
      *
-     * @param suffix 资产文件名后缀，用来挑平台包。例如桌面端传 {@code "-win64.zip"}，
-     *               安卓传 {@code "-arm64-v8a.apk"}。传 null 表示任意资产都收。
+     * @param assetPrefix 资产文件名开头（包名），用来区分同一 Release 里的两个 APK：
+     *                    客户端 {@code "usbnaslink-"}、服务端 {@code "usbnas-"}、
+     *                    桌面端 {@code "USBNASLink-"}。传 null 表示不看开头。
+     * @param suffix 资产文件名结尾（格式）。桌面端 {@code "-win64.zip"}，
+     *               两个安卓端都是 {@code "-arm64-v8a.apk"}。传 null 表示任意资产都收。
      * @return 永远不返回 null；网络失败时 ok=false
      */
-    public static Info check(String currentVersion, String suffix) {
+    public static Info check(String currentVersion, String assetPrefix, String suffix) {
         Info info = new Info();
         try {
             String body = get(API);
@@ -131,7 +134,7 @@ public final class Update {
                     assets.add(as);
                 }
             }
-            info.asset = pick(assets, suffix);
+            info.asset = pick(assets, assetPrefix, suffix);
             info.ok = true;
         } catch (Throwable t) {
             info.error = describe(t);
@@ -187,18 +190,49 @@ public final class Update {
     /**
      * 按后缀挑资产。
      *
-     * 先找完全后缀匹配，再退一步找「包含」匹配（防止有人给包名加了个前缀），
+     * 三轮匹配，越往后越松：
+     * <ol>
+     *   <li>以「-」开头的后缀（调用方给的就是这种，例如 {@code -usbnaslink-arm64-v8a.apk}）
+     *       按「包含」匹配 —— 因为文件名前面还挂着版本号，不可能 endsWith；
+     *   <li>其它后缀先试 endsWith；
+     *   <li>再退一步试 contains（防止有人给包名加了个前缀）。
+     * </ol>
+     *
+     * <h3>为什么后缀必须带上包名</h3>
+     * 同一个 Release 里躺着三个资产：{@code usbnas-<ver>-arm64-v8a.apk}、
+     * {@code usbnaslink-<ver>-arm64-v8a.apk}、{@code USBNASLink-<ver>-win64.zip}。
+     * 客户端与服务端的 APK 都以 {@code -arm64-v8a.apk} 结尾，只按这个后缀挑的话
+     * 选中哪个完全取决于「谁先出现在 assets 数组里」。现在凑巧是客户端在前，
+     * 但只要以后调整一次上传顺序，客户端就会静默下到服务端的包，
+     * 装完发现跑起来的是 {@code com.littlesauce.usbnas} 而不是 {@code usbnaslink}。
+     * 所以调用方给的后缀要带上包名：客户端给 {@code -usbnaslink-arm64-v8a.apk}，
+     * 服务端给 {@code -usbnas-arm64-v8a.apk}。
+     *
      * suffix 为 null/空时直接取第一个。挑不到返回 null。
      */
-    private static Asset pick(List<Asset> assets, String suffix) {
+    private static Asset pick(List<Asset> assets, String prefix, String suffix) {
         if (assets.isEmpty()) return null;
-        if (suffix == null || suffix.isEmpty()) return assets.get(0);
-        String s = suffix.toLowerCase(java.util.Locale.ROOT);
+        if ((prefix == null || prefix.isEmpty()) && (suffix == null || suffix.isEmpty())) return assets.get(0);
+        String pre = prefix == null ? "" : prefix.toLowerCase(java.util.Locale.ROOT);
+        String suf = suffix == null ? "" : suffix.toLowerCase(java.util.Locale.ROOT);
+        // 第一轮：开头、结尾都对上。这是唯一一档可信的匹配 —— 包名把两个安卓包
+        // 分开了（usbnas- / usbnaslink-），格式把 zip 和 apk 分开了。
         for (Asset a : assets) {
-            if (a.name != null && a.name.toLowerCase(java.util.Locale.ROOT).endsWith(s)) return a;
+            if (a.name == null) continue;
+            String n = a.name.toLowerCase(java.util.Locale.ROOT);
+            if (n.startsWith(pre) && n.endsWith(suf)) return a;
         }
+        // 第二轮：只要结尾对上（兼容把包名改了、或者只传了一个包的 release）
         for (Asset a : assets) {
-            if (a.name != null && a.name.toLowerCase(java.util.Locale.ROOT).contains(s)) return a;
+            if (a.name == null) continue;
+            String n = a.name.toLowerCase(java.util.Locale.ROOT);
+            if (!suf.isEmpty() && n.endsWith(suf)) return a;
+        }
+        // 第三轮：只要开头对上
+        for (Asset a : assets) {
+            if (a.name == null) continue;
+            String n = a.name.toLowerCase(java.util.Locale.ROOT);
+            if (!pre.isEmpty() && n.startsWith(pre)) return a;
         }
         return null;
     }

@@ -50,6 +50,7 @@ object ApkUpdater {
     private const val TAG = "USBNASLink"
 
     /** 资产名后缀：这个包只发 arm64-v8a（现役手机全是 64 位 ARM） */
+    private const val ASSET_PREFIX = "usbnaslink-"
     private const val ASSET_SUFFIX = "-arm64-v8a.apk"
 
     /** 两次自动检查至少隔 6 小时（手机比 NAS 更常开开关关，但没必要每次启动都查） */
@@ -77,7 +78,7 @@ object ApkUpdater {
             if (last > 0L && System.currentTimeMillis() - last < MIN_GAP_MS) return
         }
         Thread {
-            val info = Update.check(versionName(activity), ASSET_SUFFIX)
+            val info = Update.check(versionName(activity), ASSET_PREFIX, ASSET_SUFFIX)
             prefs.lastUpdateCheck = System.currentTimeMillis()
             activity.runOnUiThread {
                 if (!info.ok) {
@@ -98,26 +99,122 @@ object ApkUpdater {
         }.apply { isDaemon = true }.start()
     }
 
-    /** 发现新版本：说明 + 下载 / 跳过 / 稍后 */
+    /**
+     * 发现新版本：一个自绘的深色底部卡片。
+     *
+     * 不用 `AlertDialog.setMessage` 的原因：它在深色主题下是白底黑字的一整块，
+     * 而且更新说明是 Markdown 原文（## ### - 都在里面），塞进一个 TextView
+     * 会连成一大坨看不清。这里手动分层：版本对比 / 体积 / 说明（可滚动）/ 三个按钮，
+     * 颜色全部走 [Palette]，和「管理设置」页签、播放页是同一套。
+     */
     private fun showFound(activity: Activity, info: Update.Info) {
-        val sb = StringBuilder()
-        sb.append("当前 ").append(versionName(activity)).append(" → 最新 ").append(info.version)
-        if (info.asset != null && info.asset.size > 0) {
-            sb.append("\n安装包 ").append(info.asset.humanSize())
+        val prefs = Prefs(activity)
+        val pad = dp(activity, 18)
+        val wrap = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(activity, 16), pad, dp(activity, 8))
+            background = Palette.round(activity, Palette.CARD, 16f, Palette.LINE, 1f)
         }
-        if (info.notes.isNotEmpty()) sb.append("\n\n").append(info.notes)
-        sb.append("\n\n下载完会打开系统安装器，覆盖安装不影响已保存的服务器列表。")
 
-        AlertDialog.Builder(activity)
-            .setTitle("发现新版本 " + info.version)
-            .setMessage(sb.toString())
-            .setPositiveButton("下载并安装") { _, _ -> download(activity, info) }
-            .setNeutralButton("跳过此版本") { _, _ ->
-                Prefs(activity).skipVersion = info.version
-                toast(activity, "以后不再提示 " + info.version)
+        // 标题行：左侧「发现新版本」，右侧版本对比
+        wrap.addView(TextView(activity).apply {
+            text = "发现新版本 " + info.version
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        wrap.addView(TextView(activity).apply {
+            val size = if (info.asset != null && info.asset.size > 0)
+                " · " + info.asset.humanSize() else ""
+            text = "当前 " + versionName(activity) + " → " + info.version + size
+            setTextColor(Palette.ACCENT_HI)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(activity, 6), 0, 0)
+        })
+
+        // 说明：Markdown 原文照抄，去掉它自己的 # 标记 —— 手机屏幕宽度不够做真正的渲染，
+        // 但至少要让人能按行读，而不是一整段挤成一片。
+        if (info.notes.isNotEmpty()) {
+            val notes = info.notes
+                .replace("\r\n", "\n")
+                .lines()
+                .joinToString("\n") { l ->
+                    val s = l.trimStart()
+                    when {
+                        s.startsWith("### ") -> "· " + s.substring(4)
+                        s.startsWith("## ") -> s.substring(3)
+                        s.startsWith("# ") -> s.substring(2)
+                        s.startsWith("- ") -> "· " + s.substring(2)
+                        else -> l
+                    }
+                }
+                .replace(Regex("\n{3,}"), "\n\n")
+            val sv = ScrollView(activity).apply {
+                isFillViewport = false
+                addView(TextView(activity).apply {
+                    text = notes
+                    setTextColor(Palette.DIM)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setLineSpacing(dp(activity, 3).toFloat(), 1f)
+                })
             }
-            .setNegativeButton("稍后", null)
-            .show()
+            wrap.addView(sv, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 260)).apply {
+                topMargin = dp(activity, 12)
+            })
+        }
+
+        wrap.addView(TextView(activity).apply {
+            text = "下载完会打开系统安装器；覆盖安装，已保存的服务器列表与设置都不动。"
+            setTextColor(Palette.FAINT)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(0, dp(activity, 12), 0, dp(activity, 14))
+        })
+
+        // 按钮行：稍后（描边）/ 跳过此版本（描边）/ 下载并安装（实心）
+        val ops = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fun op(label: String, primary: Boolean, act: () -> Unit): Button =
+            Button(activity).apply {
+                text = label
+                isAllCaps = false
+                Palette.stripMaterial(this)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(if (primary) 0xFFFFFFFF.toInt() else Palette.FG2)
+                background = if (primary) Palette.round(activity, Palette.ACCENT, 9f)
+                else Palette.round(activity, Palette.BTN, 9f, Palette.LINE, 1f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(activity, 44), 1f).apply {
+                    rightMargin = dp(activity, 8)
+                }
+                setOnClickListener { act() }
+            }
+
+        val dlg = AlertDialog.Builder(activity).setView(wrap).create()
+        val bLater = op("稍后", false) { dlg.dismiss() }
+        val bSkip = op("跳过此版本", false) {
+            prefs.skipVersion = info.version
+            toast(activity, "以后不再提示 " + info.version)
+            dlg.dismiss()
+        }
+        val bGo = op("下载并安装", true) {
+            dlg.dismiss()
+            download(activity, info)
+        }
+        (bGo.layoutParams as LinearLayout.LayoutParams).rightMargin = 0
+        ops.addView(bLater)
+        ops.addView(bSkip)
+        ops.addView(bGo)
+        wrap.addView(ops)
+
+        dlg.window?.setBackgroundDrawable(
+            Palette.round(activity, Palette.CARD, 16f, Palette.LINE, 1f))
+        dlg.show()
+        // 弹窗宽度不要顶满，留点边距才像卡片
+        dlg.window?.setLayout(
+            (activity.resources.displayMetrics.widthPixels * 0.92f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     // ---------------------------------------------------------------- 下载
@@ -130,28 +227,69 @@ object ApkUpdater {
             return
         }
 
-        val bar = ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 1000
-            progress = 0
+        // 进度条自己画一条，不用系统 ProgressBar —— 系统那套在深色弹窗里是
+        // 白底里的一条细线，和「管理设置」卡片完全不是一个世界的。
+        val track = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = Palette.round(activity, Palette.FIELD, 4f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 6))
+        }
+        val fill = View(activity).apply {
+            background = Palette.round(activity, Palette.ACCENT, 4f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        track.addView(fill)
+
+        val pct = TextView(activity).apply {
+            text = "0%"
+            setTextColor(Palette.ACCENT_HI)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         val label = TextView(activity).apply {
             text = "连接中…"
-            setTextColor(0xFF9AA4B2.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setPadding(0, dp(activity, 12), 0, 0)
+            setTextColor(Palette.DIM2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            gravity = Gravity.END
         }
-        val box = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(activity, 22), dp(activity, 18), dp(activity, 22), dp(activity, 6))
-            addView(bar)
+        val line = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(pct)
             addView(label)
         }
+
+        val pad = dp(activity, 18)
+        val box = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(activity, 16), pad, dp(activity, 16))
+            background = Palette.round(activity, Palette.CARD, 16f, Palette.LINE, 1f)
+            addView(TextView(activity).apply {
+                text = "正在下载 " + info.version
+                setTextColor(Palette.FG)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 0, 0, dp(activity, 14))
+            })
+            addView(track)
+            addView(line, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(activity, 8)
+            })
+        }
         val dlg = AlertDialog.Builder(activity)
-            .setTitle("正在下载 " + info.version)
             .setView(box)
             .setCancelable(false)
             .create()
+        dlg.window?.setBackgroundDrawable(
+            Palette.round(activity, Palette.CARD, 16f, Palette.LINE, 1f))
+        dlg.setOnShowListener { }
         dlg.show()
+        dlg.window?.setLayout(
+            (activity.resources.displayMetrics.widthPixels * 0.92f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT)
 
         val dir = File(activity.cacheDir, "update").apply { mkdirs() }
         val out = File(dir, "usbnaslink-${info.version}.apk")
@@ -162,9 +300,16 @@ object ApkUpdater {
                 val ok = Update.downloadUrl(asset.url, out) { done, total ->
                     activity.runOnUiThread {
                         if (total > 0) {
-                            bar.progress = (done * 1000 / total).toInt()
-                            label.text = (done * 100 / total).toString() + "%  " +
-                                    fmt(done) + " / " + fmt(total)
+                            val p = (done * 100 / total).toInt().coerceIn(0, 100)
+                            pct.text = p.toString() + "%"
+                            label.text = fmt(done) + " / " + fmt(total)
+                            // 用权重模拟进度条填充：宽度 = 总宽 * p%
+                            val lp = fill.layoutParams as LinearLayout.LayoutParams
+                            lp.width = 0
+                            lp.weight = p / 100f
+                            fill.layoutParams = lp
+                            // weight=0 时宽度会是 0，给一个最小的可见块
+                            if (p <= 0) lp.width = dp(activity, 2)
                         } else {
                             label.text = fmt(done)
                         }

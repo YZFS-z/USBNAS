@@ -53,6 +53,7 @@ final class UpdUI {
     /** 两次自动检查的最小间隔：桌面端用得勤，一天一次足够 */
     static final long AUTO_GAP_MS = 24L * 60 * 60 * 1000;
 
+    private static final String ASSET_PREFIX = "USBNASLink-";
     private static final String ASSET_SUFFIX = "-win64.zip";
 
     private UpdUI() {}
@@ -100,7 +101,7 @@ final class UpdUI {
         if (!p.enabled()) return;
         if (!p.due(AUTO_GAP_MS)) return;
         Thread t = new Thread(() -> {
-            Update.Info info = Update.check(currentVersion(), ASSET_SUFFIX);
+            Update.Info info = Update.check(currentVersion(), ASSET_PREFIX, ASSET_SUFFIX);
             p.markChecked();
             if (!info.ok) return;                   // 自动检查失败不打扰用户
             if (!Update.newer(info, currentVersion())) return;
@@ -115,7 +116,7 @@ final class UpdUI {
     /** 主窗口上的「检查更新」入口：手动点，无论结果如何都给一句反馈 */
     static void manualCheck(java.awt.Component parent) {
         Thread t = new Thread(() -> {
-            Update.Info info = Update.check(currentVersion(), ASSET_SUFFIX);
+            Update.Info info = Update.check(currentVersion(), ASSET_PREFIX, ASSET_SUFFIX);
             prefs().markChecked();
             SwingUtilities.invokeLater(() -> {
                 if (!info.ok) {

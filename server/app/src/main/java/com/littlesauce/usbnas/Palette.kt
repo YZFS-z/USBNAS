@@ -78,6 +78,16 @@ object Palette {
         return d
     }
 
+    /** 实心按钮背景：主色块 + 同色描边（与服务端网页端的主按钮一致） */
+    fun solidBg(ctx: Context, color: Int, radiusDp: Float = 10f): GradientDrawable {
+        val d = GradientDrawable()
+        d.shape = GradientDrawable.RECTANGLE
+        d.cornerRadius = radiusDp * ctx.resources.displayMetrics.density
+        d.setColor(color)
+        d.setStroke(1, color, 0f, 0f)
+        return d
+    }
+
     /** 药丸背景（二维码下方那个切换按钮、等级徽章之类） */
     fun pillBg(ctx: Context, radiusDp: Float = 20f): GradientDrawable {
         val d = GradientDrawable()
