@@ -14,7 +14,7 @@ $root = $PSScriptRoot
 # its 32000-character limit, so intermediates go to a short %TEMP% path and
 # only the final zip lands in the project's dist/ folder.
 # Version: keep in sync with UpdUI.Build.VERSION and gradle versionName
-$ver  = '1.0.1'
+$ver  = '1.0.2'
 $out  = Join-Path $env:TEMP "usbnaslink-build"
 $dist = Join-Path $root "dist"
 

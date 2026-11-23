@@ -16,6 +16,19 @@
     <!-- 开机自启 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+      应用内自动更新：下载完成后用 FileProvider + ACTION_VIEW 交给系统安装器。
+
+      没有这一行时 InstallStart 会直接退出，logcat 里只有一句
+      `InstallStart: Requesting uid XXXXX needs to declare permission android.permission.REQUEST_INSTALL_PACKAGES`，
+      屏上什么都不弹 —— 用户看到的现象就是「下载完了没有安装」，而安装包其实已经躺在
+      cache/update/ 里。1.0.1 及以前就是这个症状。
+
+      声明了也不等于能装：Android 8+ 还要求用户在「安装未知应用」里为本应用放行一次
+      （见 Updater.install() 失败分支里的提示）。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- 存储：读取 U 盘 / SD 卡 -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -75,6 +88,22 @@
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/usb_device_filter" />
         </receiver>
+
+        <!--
+            自动更新下载的 APK 要通过 content:// 交给系统安装器。
+            直接给 file:// 在 Android 7+ 会抛 FileUriExposedException，
+            所以必须有这个 provider。路径表见 res/xml/update_paths.xml，
+            只暴露 cache/update/ 一个子目录。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.littlesauce.usbnas.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
 
     </application>
 </manifest>

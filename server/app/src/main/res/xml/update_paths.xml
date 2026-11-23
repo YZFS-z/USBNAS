@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自动更新下载下来的 APK 走哪条路径暴露给系统安装器。
+
+  只开 cache 下的 update/ 一个子目录，不写 files-path 也不写 root-path：
+  FileProvider 的路径表本身就是攻击面，多开一项就多一个能被别的 App
+  拿来读文件的入口。见 res/xml/update_paths.xml 的使用方
+  com.littlesauce.usbnas.Updater#install。
+-->
+<paths>
+    <cache-path name="update" path="update/" />
+</paths>
