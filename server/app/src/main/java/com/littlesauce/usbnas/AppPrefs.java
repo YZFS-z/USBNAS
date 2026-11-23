@@ -21,7 +21,8 @@ public final class AppPrefs {
     private static final String KEY_MUSIC_DIRS = "music_dirs";
     private static final String KEY_VIDEO_DIRS = "video_dirs";
     private static final String KEY_BOOK_DIRS = "book_dirs";
-
+    /** 相册目录，与音乐/影视/图书各自独立（默认空 = 不扫，见 photoDirs 的说明） */
+    private static final String KEY_PHOTO_DIRS = "photo_dirs";
     /** 自动更新开关（默认关，见文件末尾 autoUpdate 的注释） */
     private static final String KEY_AUTO_UPDATE = "auto_update";
     /** 跳过某个版本 */
@@ -237,6 +238,43 @@ public final class AppPrefs {
             }
         }
         sp(c).edit().putString(KEY_BOOK_DIRS, sb.toString()).apply();
+    }
+
+    // ==================== 相册目录 ====================
+
+    /**
+     * 管理员预设的相册根目录（绝对路径，可多个）。
+     *
+     * <p>独立一个键，理由同 bookDirs：相册和影音书的扫描代价完全不是一回事 ——
+     * 一个相册目录可能几万张图，缩略图列表必须分页/限数，管理员得能单独关掉它。
+     *
+     * <p>默认空：**不回落全盘扫**。手机上 jpg/png 满地都是（图标、缓存、截图），
+     * 一旦默认扫全盘，「相册」页会变成一堆垃圾图，比空着更糟。
+     */
+    public static java.util.List<String> photoDirs(Context c) {
+        String s = sp(c).getString(KEY_PHOTO_DIRS, "");
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (s == null || s.isEmpty()) return out;
+        for (String line : s.split("\n")) {
+            String t = line.trim();
+            if (!t.isEmpty() && !out.contains(t)) out.add(t);
+        }
+        return out;
+    }
+
+    public static void setPhotoDirs(Context c, java.util.List<String> dirs) {
+        StringBuilder sb = new StringBuilder();
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        if (dirs != null) {
+            for (String d : dirs) {
+                String t = d == null ? "" : d.trim();
+                if (t.isEmpty()) continue;
+                if (!seen.add(t)) continue;
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(t);
+            }
+        }
+        sp(c).edit().putString(KEY_PHOTO_DIRS, sb.toString()).apply();
     }
 
     // ==================== 自动更新 ====================

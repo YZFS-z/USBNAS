@@ -278,11 +278,19 @@ class DiscView(ctx: Context) : View(ctx) {
 
         // 切歌动画：**只有唱片平移**，唱针是固定在机身上的机构，不跟着走 ——
         // 真实留声机换唱片时，盘从叉架上下来/上去，音臂原地不动。
+        //
+        // 方向约定（这是「动效连贯」的关键）：
+        //   dir = +1 表示「下一首」（内容往左走，像看片时往后翻一页）
+        //   dir = -1 表示「上一首」（内容往右走）
+        // 旧盘朝 dir 的反方向滑出（-dir），新盘必须从**同一侧**接上来，
+        // 也就是继续朝 -dir 走：入场位移为 -dir*w*(1-e)，e 从 0 到 1 时它从
+        // 屏幕外滑回 0。反过来写成 +dir 就会变成「旧盘从左边出去、新盘又从
+        // 左边弹进来」，两段动画互相抵消，看起来像卡了一下再重放。
         val sliding = flip < 1f
         if (sliding) {
             val e = easeInOut(flip)
-            val dx = if (flipOut) -w * e * dir     // 旧盘往哪边走
-            else w * (1f - e) * -dir               // 新盘从另一侧进来
+            val dx = if (flipOut) -w * e * dir        // 旧盘：从 0 滑到 -dir*w（完全出画）
+            else -dir * w * (1f - e)                  // 新盘：从 -dir*w 滑回 0
             canvas.save()
             canvas.translate(dx, 0f)
         }

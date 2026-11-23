@@ -278,6 +278,9 @@ class PdfActivity : Activity() {
         }
         if (out.exists()) out.delete()
         if (!tmp.renameTo(out)) throw java.io.IOException("缓存写入失败")
+        // 刚写完就裁一次：keep 传自己，别人（包括这本旧的一份）可以淘汰。
+        // 放在下载线程里做，别占 UI 线程 —— 目录里可能有几十个文件要 stat。
+        CacheMgr.trimPdf(this, out)
         return out
     }
 

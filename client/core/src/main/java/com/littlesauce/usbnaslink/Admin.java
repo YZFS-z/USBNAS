@@ -45,6 +45,8 @@ public final class Admin {
         public final List<String> musicDirs = new ArrayList<>();
         public final List<String> videoDirs = new ArrayList<>();
         public final List<String> bookDirs = new ArrayList<>();
+        /** 相册目录（服务端 1.0.2 起）。旧版服务端不会返回这个字段，这里就留空。 */
+        public final List<String> photoDirs = new ArrayList<>();
         /** 候选目录（各存储根下两层），由服务端枚举，客户端不必拉全盘 */
         public final List<DirChoice> choices = new ArrayList<>();
     }
@@ -82,6 +84,7 @@ public final class Admin {
             readStrings(m.get("musicDirs"), st.musicDirs);
             readStrings(m.get("videoDirs"), st.videoDirs);
             readStrings(m.get("bookDirs"), st.bookDirs);
+            readStrings(m.get("photoDirs"), st.photoDirs);
 
             Object ds = m.get("dirs");
             if (ds instanceof List) {
@@ -119,6 +122,17 @@ public final class Admin {
     /** 保存图书目录（多选，每个目录在客户端是一层书架） */
     public static Saved saveBookDirs(String baseUrl, String cookie, List<String> dirs, int timeoutMs) {
         return post(baseUrl, cookie, "book", "dirs", joinLines(dirs), timeoutMs);
+    }
+
+    /**
+     * 保存相册目录（多选，每个目录在客户端是一个相册）。
+     *
+     * 相册是唯一「不配就彻底没有」的库：全盘扫图在手机上会把图标、缓存缩略图、
+     * 聊天保存图全卷进来，几千张里没有一张是用户想看的。所以服务端默认空、
+     * 客户端也不做任何兜底扫描。
+     */
+    public static Saved savePhotoDirs(String baseUrl, String cookie, List<String> dirs, int timeoutMs) {
+        return post(baseUrl, cookie, "photo", "dirs", joinLines(dirs), timeoutMs);
     }
 
     private static Saved post(String baseUrl, String cookie, String action,

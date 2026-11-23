@@ -293,6 +293,10 @@ object ApkUpdater {
 
         val dir = File(activity.cacheDir, "update").apply { mkdirs() }
         val out = File(dir, "usbnaslink-${info.version}.apk")
+        // 下载前先把上一版留下的包清掉：它们已经装过（或跳过），留着只是白占十几 MB。
+        // 放在这里而不是 install() 之后，是因为 install 之后 Activity 可能已经切走，
+        // 用户装完直接杀进程的话那一份永远没人回收。
+        CacheMgr.trimUpdate(activity)
 
         Thread {
             var err: String? = null
@@ -441,6 +445,13 @@ object ApkUpdater {
             bottomMargin = dp(activity, 12)
         })
 
+        // ---- 卡片：存储 ----
+        // 放在「关于」之前：缓存是用户真会去点的，版本号只是看。
+        wrap.addView(cacheCard(activity), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(activity, 12)
+        })
+
         // ---- 卡片：关于 ----
         val about = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -491,6 +502,74 @@ object ApkUpdater {
         wrap.addView(about)
 
         return wrap
+    }
+
+    /**
+     * 卡片：存储占用。
+     *
+     * <p>这个 App 的缓存大头不是系统那个「清除缓存」按钮能说清的：PDF 是整本拉下来
+     * 缓存的（一本几 MB 到几十 MB，读完不会自己走），更新包每个十几 MB。
+     * 所以这里把两块分开列出来，给一个「立即清理」。
+     *
+     * <p>清理线程放在后台：目录里可能几十个文件要 stat，走 UI 线程会卡一下。
+     * 清完回到主线程刷新数字并把按钮文字改成结果。
+     */
+    private fun cacheCard(activity: Activity): LinearLayout {
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 14))
+            background = Palette.round(activity, Palette.CARD, 12f, Palette.LINE, 1f)
+        }
+        card.addView(TextView(activity).apply {
+            text = "存储"
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        val detail = TextView(activity).apply {
+            setTextColor(Palette.DIM2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(activity, 8), 0, 0)
+            text = "统计中…"
+        }
+        card.addView(detail)
+        card.addView(TextView(activity).apply {
+            text = "PDF 只留最近几本，安装包装完就不再保留；网页缓存不动，删了会丢滚动位置和登录态。"
+            setTextColor(Palette.FAINT)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(0, dp(activity, 6), 0, 0)
+        })
+
+        val btn = smallButton(activity, "立即清理", false)
+        val lp = btn.layoutParams as LinearLayout.LayoutParams
+        lp.topMargin = dp(activity, 12)
+        card.addView(btn)
+
+        fun refresh() {
+            Thread {
+                val u = CacheMgr.usage(activity)
+                activity.runOnUiThread {
+                    detail.text = if (u.totalBytes <= 0) "没有可清理的缓存"
+                    else u.text() + " · 共 " + u.human(u.totalBytes)
+                }
+            }.start()
+        }
+        btn.setOnClickListener {
+            btn.isEnabled = false
+            btn.text = "清理中…"
+            Thread {
+                val freed = CacheMgr.clearAll(activity)
+                val u = CacheMgr.usage(activity)
+                activity.runOnUiThread {
+                    btn.text = if (freed > 0) "已释放 " + u.human(freed) else "本来就是干净的"
+                    detail.text = if (u.totalBytes <= 0) "没有可清理的缓存"
+                    else u.text() + " · 共 " + u.human(u.totalBytes)
+                    toast(activity, if (freed > 0) "已释放 " + u.human(freed) else "没有可清理的缓存")
+                }
+            }.start()
+        }
+        refresh()
+        return card
     }
 
     /**

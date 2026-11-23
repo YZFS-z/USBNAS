@@ -131,6 +131,15 @@ public class HttpServer {
          */
         public java.util.List<String> bookDirs = new java.util.ArrayList<>();
 
+        /**
+         * 相册根目录：管理员预设的绝对路径列表，可多个，默认空。
+         *
+         * 默认空着（相册页什么都不显示）是刻意的：手机里 jpg/png 满地都是
+         * （图标、WebView 缓存、聊天截图），默认扫全盘会让相册变成垃圾场。
+         * 这一条和书库同一套取舍 —— 宁可一开始是空的，也不要一屏噪点。
+         */
+        public java.util.List<String> photoDirs = new java.util.ArrayList<>();
+
         /** 解析 Cookie 会话，返回登录用户；未登录返回 null */
         public Users.User session(Request req) {
             Users.Snapshot snap = users;
@@ -182,6 +191,7 @@ public class HttpServer {
             this.musicDirs = AppPrefs.musicDirs(c);
             this.videoDirs = AppPrefs.videoDirs(c);
             this.bookDirs = AppPrefs.bookDirs(c);
+            this.photoDirs = AppPrefs.photoDirs(c);
         }
 
         /** App 里改完标题后调用：立刻生效，不必重启服务 */
@@ -241,6 +251,24 @@ public class HttpServer {
             this.bookDirs = copy;
             HttpServer o = owner;
             if (o != null) o.invalidateBookLib();
+        }
+
+        /**
+         * 管理员改完相册目录后调用：立刻生效并清掉相册缓存。
+         * 相册和图书一样是「多目录并存、源目录形态未知」，所以构造方式与 setBookDirs 同构。
+         */
+        public void setPhotoDirs(List<String> dirs) {
+            List<String> copy = new ArrayList<>();
+            if (dirs != null) {
+                for (String d : dirs) {
+                    if (d == null) continue;
+                    String t = d.trim();
+                    if (!t.isEmpty() && !copy.contains(t)) copy.add(t);
+                }
+            }
+            this.photoDirs = copy;
+            HttpServer o = owner;
+            if (o != null) o.invalidatePhotoLib();
         }
     }
 
@@ -726,6 +754,10 @@ public class HttpServer {
         if (p != null && p.equals("/_music")) {
             return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
         }
+        // 内嵌封面：性质和「列表里能看到的图」一样，判定与曲库一致
+        if (p != null && p.equals("/cover")) {
+            return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
+        }
         // 影视库清单与刮削信息：同样只吐路径和元数据，判定与曲库一致
         if (p != null && (p.equals("/_videos") || p.equals("/_videos/meta"))) {
             return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
@@ -733,6 +765,15 @@ public class HttpServer {
         // 书库清单：同性质，只吐书名和路径，不吐正文
         if (p != null && p.equals("/_books")) {
             return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
+        }
+        // 相册清单：只吐路径和尺寸，判定与曲库一致
+        if (p != null && p.equals("/_photos")) {
+            return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
+        }
+        // 相册删除：写操作，一律先落到 handler 里判管理员等级，
+        // 在这一层放行（否则匿名会拿到 401，客户端没法区分「没登录」和「不是管理员」）
+        if (p != null && p.equals("/_photos/delete")) {
+            return true;
         }
         // 书库正文抽取：这是真·正文，但它和 /view、/play/* 是同一层东西 ——
         // 能看列表就能看内容（文件本身也一直是这么发的）。差别在于这里给了
@@ -1101,6 +1142,26 @@ public class HttpServer {
         // 歌词接口
         if (path.equals("/lyrics")) {
             handleLyrics(req, out);
+            return;
+        }
+
+        // 封面：按音频文件路径吐出内嵌封面（ID3 APIC / FLAC PICTURE）。
+        // 客户端播放页拿它贴到唱片中心；目录里没有同名图时全靠这条腿。
+        if (path.equals("/cover")) {
+            handleCover(req, out);
+            return;
+        }
+
+        // 相册清单：客户端「相册」页签一次拿一屏缩略图，按目录分组
+        if (path.equals("/_photos")) {
+            handlePhotoLib(req, out);
+            return;
+        }
+
+        // 批量删除照片：客户端相册多选后提交。只动相册目录里的图片文件，
+        // 且要求管理员（删盘上文件是写操作，和改目录配置同级）。
+        if (path.equals("/_photos/delete")) {
+            handlePhotoDelete(req, in, out);
             return;
         }
 
@@ -1586,11 +1647,139 @@ public class HttpServer {
                     .append(",\"ti\":").append(t.tagTitle == null ? "null" : "\"" + jsonEsc(t.tagTitle) + "\"")
                     // c：封面绝对路径，客户端拼成 /raw?f= 直接拉图。没有封面就是 null，
                     // 播放页会退回自绘的蓝贴纸 —— 而不是留一块空白。
+                    // 注意 c 只表示「目录里有张图」，内嵌在音频标签里的封面走 /cover 端点，
+                    // 由客户端按 p 去要 —— 见 i 键。
                     .append(",\"c\":").append(t.cover == null ? "null" : "\"" + jsonEsc(t.cover) + "\"")
+                    // i：1 表示「这首有内嵌封面可选」。这里不做真正的抽取（那是解码，
+                    // 上千首会拖慢列表），只按文件头几 KB 判断是否存在，见 hasEmbeddedCover()。
+                    .append(",\"i\":").append(hasEmbeddedCover(t.path) ? 1 : 0)
                     .append('}');
         }
         sb.append("],\"scannedAt\":").append(musicCacheAt).append('}');
         sendJson(out, sb.toString());
+    }
+
+    /**
+     * GET /cover?f=&lt;音频绝对路径&gt;
+     *
+     * 把内嵌在音频文件里的封面图吐出来。客户端播放页拿到曲目后会先试曲库里的
+     * {@code c}（目录里的同名图 / cover.jpg），再退回这条 —— 实测库里绝大多数
+     * 专辑图是钉在 MP3 的 ID3 标签里的，目录里一张图都没有。
+     *
+     * 只服务曲库目录里的音频文件（{@code inDirs} + {@code AUDIO_EXT} 双重约束），
+     * 否则这个接口就成了「用任意路径读文件内容」的通道。
+     * 抽不到封面时返回 404 而不是空 200，客户端据此退回自绘贴纸。
+     */
+    private void handleCover(Request req, OutputStream out) throws IOException {
+        String p = req.param("f");
+        File f = resolve(p);
+        if (f == null || !f.isFile()) {
+            sendBytes(out, "text/plain; charset=utf-8",
+                    "no cover".getBytes(StandardCharsets.UTF_8), 404, "Not Found");
+            return;
+        }
+        String name = f.getName();
+        int dot = name.lastIndexOf('.');
+        String ext = dot > 0 ? name.substring(dot + 1).toLowerCase(Locale.ROOT) : "";
+        if (!AUDIO_EXT.contains(ext) || !inDirs(f, cfg.musicDirs)) {
+            sendBytes(out, "text/plain; charset=utf-8",
+                    "not a track".getBytes(StandardCharsets.UTF_8), 404, "Not Found");
+            return;
+        }
+        CoverArt.Art art = CoverArt.get(f);
+        if (art == null || art.mime == null || art.data == null) {
+            sendBytes(out, "text/plain; charset=utf-8",
+                    "no cover".getBytes(StandardCharsets.UTF_8), 404, "Not Found");
+            return;
+        }
+        // 缓存一天：封面跟文件一起变，文件没变就不用重抽。ETag 用长度+时间，
+        // 客户端（OkHttp）自己会带 If-None-Match 回来问一次。
+        String tag = "\"" + art.data.length + "-" + f.lastModified() + "\"";
+        String inm = req.headers.get("if-none-match");
+        if (inm != null && inm.contains(tag.replace("\"", ""))) {
+            out.write(("HTTP/1.1 304 Not Modified\r\n"
+                    + "Server: " + cfg.title + "\r\n"
+                    + "ETag: " + tag + "\r\n"
+                    + "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            return;
+        }
+        byte[] head = ("HTTP/1.1 200 OK\r\n"
+                + "Server: " + cfg.title + "\r\n"
+                + "Content-Type: " + art.mime + "\r\n"
+                + "Content-Length: " + art.data.length + "\r\n"
+                + "ETag: " + tag + "\r\n"
+                + "Cache-Control: private, max-age=86400\r\n"
+                + "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8);
+        out.write(head);
+        out.write(art.data);
+        out.flush();
+    }
+
+    /**
+     * 只在文件头几 KB 里判断「有没有内嵌封面」，不真的把图解出来。
+     *
+     * 列表接口要跑上千次，真解码会慢到不可用；这里只找特征串：
+     * ID3v2 的 {@code APIC}、ID3v2.2 的 {@code PIC}、FLAC 的 {@code PICTURE}
+     * 与 mime 串、MP4 的 {@code covr}。命中就算有，客户端再去 /cover 真取。
+     */
+    private static boolean hasEmbeddedCover(String path) {
+        if (path == null) return false;
+        int dot = path.lastIndexOf('.');
+        if (dot < 0) return false;
+        String ext = path.substring(dot + 1).toLowerCase(Locale.ROOT);
+        // 只有这几种容器能内嵌图；wav/amr 这几类历史上没有标准位置
+        if (!(ext.equals("mp3") || ext.equals("flac") || ext.equals("m4a")
+                || ext.equals("mp4") || ext.equals("ogg") || ext.equals("opus")
+                || ext.equals("ape") || ext.equals("wma"))) {
+            return false;
+        }
+        java.io.RandomAccessFile raf = null;
+        try {
+            raf = new java.io.RandomAccessFile(path, "r");
+            int n = (int) Math.min(raf.length(), 64 * 1024);
+            if (n < 200) return false;
+            byte[] b = new byte[n];
+            int off = 0;
+            while (off < n) {
+                int got = raf.read(b, off, n - off);
+                if (got <= 0) break;
+                off += got;
+            }
+            if (b.length < 4) return false;
+            // FLAC 直接看块链，别被音频数据里的巧合字符串骗
+            if (b.length > 8 && b[0] == 'f' && b[1] == 'L' && b[2] == 'a' && b[3] == 'C') {
+                int p = 4;
+                for (int guard = 0; guard < 32 && p + 4 <= off; guard++) {
+                    int head = b[p] & 0xff;
+                    boolean last = (head & 0x80) != 0;
+                    int type = head & 0x7f;
+                    if (type == 6) return true;
+                    int len = ((b[p + 1] & 0xff) << 16) | ((b[p + 2] & 0xff) << 8) | (b[p + 3] & 0xff);
+                    if (last || len < 0 || p + 4 + len > off) break;
+                    p += 4 + len;
+                }
+                return false;
+            }
+            String s = new String(b, 0, off, StandardCharsets.ISO_8859_1);
+            // 逐个判，别写成组合条件 —— 运算符优先级一错就会把「image/ 出现在
+            // 任意位置」当成有封面，误判成 i=1 后客户端每次都要白跑一趟 /cover
+            if (s.contains("APIC")) return true;
+            if (s.contains("PIC") && s.contains("image/")) return true;
+            if (s.contains("covr")) return true;
+            if (s.contains("PICTURE")) return true;
+            if (s.contains("image/jpeg") && s.contains("ID3")) return true;
+            return false;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (raf != null) {
+                try {
+                    raf.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
     }
 
     /**
@@ -1631,6 +1820,419 @@ public class HttpServer {
     }
 
     /** 路径是否落在预设音乐目录里（含目录本身） */
+    // ==================== 相册 ====================
+
+    /** 会被当图片收进来的扩展名。heic 收了但客户端要系统支持才解得开，转不动就显示占位。 */
+    private static final Set<String> PHOTO_EXT = new HashSet<>(Arrays.asList(
+            "jpg", "jpeg", "png", "webp", "bmp", "gif", "heic", "heif"));
+
+    /** 图片清单缓存 60 秒：相册目录动辄上万张，每翻一页都重扫会一直转盘 */
+    private static final long PHOTO_TTL_MS = 60000L;
+
+    /** 一次最多列这么多张。超过的目录按修改时间取最新的那部分（相册通常是「最近的想看」） */
+    private static final int PHOTO_MAX_FILES = 4000;
+
+    /** 递归深度上限，防止有人把相册目录指到 /storage 根 */
+    private static final int PHOTO_MAX_DEPTH = 8;
+
+    private static final class Photo {
+        String path;   // 服务端绝对路径
+        String name;   // 文件名（含扩展名）
+        String dir;    // 所在目录绝对路径
+        long size;
+        long mtime;
+        int w;         // 宽高：只在列表里读 JPEG/PNG 的头部，解不出就 0
+        int h;
+    }
+
+    /** 相册缓存：'\0' 哨兵表示「还没扫过」 */
+    private volatile List<Photo> photoCache;
+    private volatile long photoCacheAt;
+    private String photoCacheKey = "\u0000";
+
+    /** App 里改了相册目录后调用：清缓存，下次请求重扫 */
+    void invalidatePhotoLib() {
+        photoCache = null;
+        photoCacheAt = 0L;
+        photoCacheKey = "\u0000";
+    }
+
+    /**
+     * GET /_photos?dir=可选子目录
+     *
+     * <p>返回结构刻意和 /_music 平行：
+     * <pre>
+     * {"ok":true,"total":N,"dirs":[{"p":..,"n":..,"c":张数}],
+     *  "photos":[{"p":..,"n":..,"d":..,"s":字节,"m":mtime,"w":宽,"h":高}],
+     *  "scannedAt":ms}
+     * </pre>
+     *
+     * <p>为什么单独开一个端点而不是复用 /_dirlist：那个接口是给「移动/复制文件」的
+     * 对话框用的，只列子目录、还要求写权限；相册要的是读权限、只列图片、还要带
+     * 尺寸和修改时间，两套需求凑不到一起。
+     *
+     * <p>为什么没有配置目录时返回空：手机上 jpg/png 满地都是（图标、缓存、截图），
+     * 默认扫全盘会让「相册」里全是垃圾。这一条和书库同一套取舍。
+     */
+    private void handlePhotoLib(Request req, OutputStream out) throws IOException {
+        List<Photo> all = photoLibrary();
+        String sub = req.param("dir");
+        File subDir = (sub == null || sub.isEmpty()) ? null : resolve(sub);
+        if (subDir != null && !inPhotoDirs(subDir)) subDir = null;
+
+        StringBuilder sb = new StringBuilder(1024 + all.size() * 140);
+        sb.append("{\"ok\":true,\"total\":").append(all.size());
+
+        // dirs：只统计当前层下一级的图片数，供客户端画「相册封面墙」的分组头
+        java.util.LinkedHashMap<String, Integer> counts = new java.util.LinkedHashMap<>();
+        for (Photo p : all) {
+            if (subDir != null && !isUnder(p, subDir)) continue;
+            counts.put(p.dir, counts.containsKey(p.dir) ? counts.get(p.dir) + 1 : 1);
+        }
+        sb.append(",\"dirs\":[");
+        boolean firstDir = true;
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (!firstDir) sb.append(',');
+            firstDir = false;
+            String dp2 = e.getKey();
+            // 显示名用「相对当前层」的末段：绝对路径在手机上长得看不出是啥
+            String name = lastSeg(dp2);
+            sb.append("{\"p\":\"").append(jsonEsc(dp2))
+                    .append("\",\"n\":\"").append(jsonEsc(name))
+                    .append("\",\"c\":").append(e.getValue()).append('}');
+        }
+        sb.append(']');
+
+        sb.append(",\"photos\":[");
+        boolean first = true;
+        for (Photo p : all) {
+            if (subDir != null && !isUnder(p, subDir)) continue;
+            if (!first) sb.append(',');
+            first = false;
+            sb.append("{\"p\":\"").append(jsonEsc(p.path))
+                    .append("\",\"n\":\"").append(jsonEsc(p.name))
+                    .append("\",\"d\":\"").append(jsonEsc(p.dir))
+                    .append("\",\"s\":").append(p.size)
+                    .append(",\"m\":").append(p.mtime)
+                    .append(",\"w\":").append(p.w)
+                    .append(",\"h\":").append(p.h).append('}');
+        }
+        sb.append(']');
+        sb.append(",\"scannedAt\":").append(System.currentTimeMillis()).append('}');
+        sendJson(out, sb.toString());
+    }
+
+    private static boolean isUnder(Photo p, File dir) {
+        String root;
+        try {
+            root = dir.getCanonicalPath();
+        } catch (IOException e) {
+            root = dir.getAbsolutePath();
+        }
+        String s = p.path;
+        return s.equals(root) || s.startsWith(root.endsWith("/") ? root : root + "/");
+    }
+
+    private static String lastSeg(String p) {
+        if (p == null) return "";
+        int i = p.endsWith("/") ? p.lastIndexOf('/', p.length() - 2) : p.lastIndexOf('/');
+        return i < 0 ? p : p.substring(i + 1);
+    }
+
+    /** 当前目录是否落在预设的相册目录里（没配就等于「什么都不许」） */
+    /**
+     * 批量删除照片（POST /_photos/delete）。
+     *
+     * 边界三件套，缺一不可：
+     *   1. 必须是管理员 —— 删的是盘上真文件，不是配置项；
+     *   2. 只认 GET/POST 里的每个 f 参数，逐个 resolve() 后必须在相册目录内
+     *      （resolve 会拦 ../，inPhotoDirs 会拦「配了相册目录之外的路径」）；
+     *   3. 只删 PHOTO_EXT 里的图片，绝不因为一个畸形参数把 .txt/.exe 删掉。
+     *
+     * 一次最多 200 个：客户端按 40 一批发，给个上限是防止某个脚本一把梭。
+     */
+    private void handlePhotoDelete(Request req, InputStream in, OutputStream out) throws IOException {
+        boolean logged = req.user != null;
+        boolean isAdmin = logged && req.user.level >= Users.LEVEL_ADMIN;
+        String json;
+        if (!isAdmin) {
+            json = "{\"ok\":false,\"error\":\"需要管理员账号\",\"deleted\":0}";
+        } else if (!"POST".equalsIgnoreCase(req.method)) {
+            json = "{\"ok\":false,\"error\":\"只接受 POST\",\"deleted\":0}";
+        } else {
+            Map<String, String> form = readForm(in, req.contentLength());
+            List<String> raw = new ArrayList<>();
+            // 兼容两种提交方式：f 一个参数多行（\n 分隔），或 f 重复多次
+            String single = form.get("f");
+            if (single != null) {
+                for (String line : single.split("\n")) {
+                    if (!line.trim().isEmpty()) raw.add(line.trim());
+                }
+            }
+            Set<String> seen = new java.util.LinkedHashSet<>();
+            int deleted = 0;
+            int skipped = 0;
+            String lastErr = null;
+            for (String s : raw) {
+                if (deleted + skipped >= 200) break;
+                if (!seen.add(s)) continue;
+                File f = resolve(s);
+                if (f == null || !f.isFile() || !inPhotoDirs(f) || !isPhotoName(f.getName())) {
+                    skipped++;
+                    continue;
+                }
+                try {
+                    if (f.delete()) {
+                        deleted++;
+                    } else {
+                        skipped++;
+                        lastErr = "删不掉：" + f.getName();
+                    }
+                } catch (SecurityException e) {
+                    skipped++;
+                    lastErr = "没有权限删 " + f.getName();
+                }
+            }
+            if (deleted > 0) {
+                invalidatePhotoLib();
+                cfg.setPhotoDirs(cfg.photoDirs); // 触发一次配置回写，保持和磁盘一致
+                log("相册：删除 " + deleted + " 张，跳过 " + skipped);
+            }
+            StringBuilder sb = new StringBuilder(192);
+            sb.append("{\"ok\":true,\"deleted\":").append(deleted)
+                    .append(",\"skipped\":").append(skipped);
+            if (lastErr != null) sb.append(",\"error\":\"").append(jsonEsc(lastErr)).append('"');
+            sb.append('}');
+            json = sb.toString();
+        }
+        sendJson(out, json);
+    }
+
+    /** 扩展名判断：只认 PHOTO_EXT 里的扩展名（小写比较） */
+    private static boolean isPhotoName(String name) {
+        int i = name.lastIndexOf('.');
+        if (i < 0 || i == name.length() - 1) return false;
+        return PHOTO_EXT.contains(name.substring(i + 1).toLowerCase(Locale.ROOT));
+    }
+
+    private boolean inPhotoDirs(File f) {
+        List<String> dirs = cfg.photoDirs;
+        if (dirs == null || dirs.isEmpty()) return false;
+        String p;
+        try {
+            p = f.getCanonicalPath();
+        } catch (IOException e) {
+            p = f.getAbsolutePath();
+        }
+        for (String d : dirs) {
+            String root;
+            try {
+                root = new File(d).getCanonicalPath();
+            } catch (IOException e) {
+                root = d;
+            }
+            if (p.equals(root) || p.startsWith(root.endsWith("/") ? root : root + "/")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 相册清单，带 60 秒缓存。
+     *
+     * <p>排序按 mtime 倒序：相册的默认心智是「最近的放最前」，这和曲库按目录名排是
+     * 两种场景，所以这里不跟音乐那套比。
+     */
+    private List<Photo> photoLibrary() {
+        String key = cfg.photoDirs == null ? "" : String.valueOf(cfg.photoDirs.hashCode());
+        long now = System.currentTimeMillis();
+        List<Photo> c = photoCache;
+        if (c != null && now - photoCacheAt < PHOTO_TTL_MS && key.equals(photoCacheKey)) return c;
+
+        List<Photo> out = new ArrayList<>();
+        List<String> dirs = cfg.photoDirs;
+        if (dirs != null) {
+            for (String d : dirs) {
+                File f = new File(d);
+                if (!f.isDirectory()) continue;
+                walkPhoto(f, out, 0);
+            }
+        }
+        out.sort((a, b) -> Long.compare(b.mtime, a.mtime));
+        if (out.size() > PHOTO_MAX_FILES) out = out.subList(0, PHOTO_MAX_FILES);
+
+        photoCache = out;
+        photoCacheAt = now;
+        photoCacheKey = key;
+        return out;
+    }
+
+    /**
+     * 递归收图片。跳过隐藏目录与常见的非相册重目录（缩略图缓存、Android/data），
+     * 后两个在手机上一进去就是几万个图标文件，且用户从不想在相册里看到它们。
+     */
+    private void walkPhoto(File dir, List<Photo> out, int depth) {
+        if (dir == null || depth > PHOTO_MAX_DEPTH) return;
+        if (out.size() >= PHOTO_MAX_FILES) return;
+        File[] list;
+        try {
+            list = dir.listFiles();
+        } catch (SecurityException e) {
+            return;
+        }
+        if (list == null) return;
+        for (File f : list) {
+            if (out.size() >= PHOTO_MAX_FILES) return;
+            String nm = f.getName();
+            if (nm.startsWith(".")) continue;
+            if (f.isDirectory()) {
+                // 这两类目录进相册只是噪音，而且数量巨大
+                if (nm.equalsIgnoreCase("Android") || nm.equalsIgnoreCase("LOST.DIR")) continue;
+                if (nm.equalsIgnoreCase(".thumbnails") || nm.equalsIgnoreCase("thumbnails")) continue;
+                walkPhoto(f, out, depth + 1);
+                continue;
+            }
+            int dot = nm.lastIndexOf('.');
+            if (dot < 0) continue;
+            String ext = nm.substring(dot + 1).toLowerCase(Locale.ROOT);
+            if (!PHOTO_EXT.contains(ext)) continue;
+            Photo p = new Photo();
+            p.path = f.getAbsolutePath();
+            p.name = nm;
+            p.dir = dir.getAbsolutePath();
+            try {
+                p.size = f.length();
+                p.mtime = f.lastModified();
+            } catch (SecurityException e) {
+                continue;
+            }
+            // 尺寸只读头部，不解码 —— 上万张图真解码会把手机拖死。
+            // 读不出来（坏文件、格式不认识）就留 0，客户端按 0 显示占位。
+            int[] wh = imageSize(f);
+            p.w = wh[0];
+            p.h = wh[1];
+            out.add(p);
+        }
+    }
+
+    /**
+     * 只读文件头拿宽高。支持 JPEG（SOF 段）、PNG（IHDR）、GIF、BMP、WebP（VP8/VP8L/VP8X）。
+     * 其它格式或坏了返回 {0,0}。
+     */
+    private static int[] imageSize(File f) {
+        java.io.RandomAccessFile raf = null;
+        try {
+            raf = new java.io.RandomAccessFile(f, "r");
+            byte[] b = new byte[32];
+            int n = raf.read(b, 0, 32);
+            if (n < 24) return new int[]{0, 0};
+            // PNG：8 字节签名 + 4 长度 + "IHDR" + 宽 + 高
+            if ((b[0] & 0xff) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') {
+                return new int[]{be32(b, 16), be32(b, 20)};
+            }
+            // GIF：'G','I','F' + 宽(LE16) + 高(LE16)
+            if (b[0] == 'G' && b[1] == 'I' && b[2] == 'F') {
+                return new int[]{le16(b, 6), le16(b, 8)};
+            }
+            // BMP：'B','M' + 文件长 + 保留 + 数据偏移 + 头长 + 宽(LE32, 有符号) + 高
+            if (b[0] == 'B' && b[1] == 'M') {
+                return new int[]{Math.abs(le32(b, 18)), Math.abs(le32(b, 22))};
+            }
+            // WebP：RIFF....WEBP + 子块类型
+            if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
+                    && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') {
+                String sub = new String(b, 12, 4, StandardCharsets.ISO_8859_1);
+                if ("VP8X".equals(sub)) {
+                    return new int[]{le24(b, 24) + 1, le24(b, 27) + 1};
+                }
+                if ("VP8 ".equals(sub)) {
+                    return new int[]{le16(b, 26) & 0x3fff, le16(b, 28) & 0x3fff};
+                }
+                if ("VP8L".equals(sub)) {
+                    int bits = le32(b, 21);
+                    return new int[]{(bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1};
+                }
+                return new int[]{0, 0};
+            }
+            // JPEG：扫 SOF0..SOF15（跳过 C4/C8/CC 这三个非 SOF 标记）
+            if ((b[0] & 0xff) == 0xFF && (b[1] & 0xff) == 0xD8) {
+                return jpegSize(f);
+            }
+            return new int[]{0, 0};
+        } catch (Throwable t) {
+            return new int[]{0, 0};
+        } finally {
+            if (raf != null) {
+                try {
+                    raf.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
+    private static int[] jpegSize(File f) {
+        java.io.RandomAccessFile raf = null;
+        try {
+            raf = new java.io.RandomAccessFile(f, "r");
+            long len = raf.length();
+            long p = 2;
+            byte[] hdr = new byte[4];
+            while (p + 4 < len) {
+                raf.seek(p);
+                if (raf.read(hdr, 0, 4) < 4) break;
+                if ((hdr[0] & 0xff) != 0xFF) {
+                    p++;            // 对齐到下一个标记
+                    continue;
+                }
+                int marker = hdr[1] & 0xff;
+                // 段长为 0 的独立标记，不含长度字段
+                if (marker == 0xD8 || marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7)) {
+                    p += 2;
+                    continue;
+                }
+                int segLen = ((hdr[2] & 0xff) << 8) | (hdr[3] & 0xff);
+                boolean isSof = marker >= 0xC0 && marker <= 0xCF
+                        && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
+                if (isSof) {
+                    byte[] sof = new byte[5];
+                    raf.seek(p + 4);
+                    if (raf.read(sof, 0, 5) < 5) break;
+                    int h = ((sof[1] & 0xff) << 8) | (sof[2] & 0xff);
+                    int w = ((sof[3] & 0xff) << 8) | (sof[4] & 0xff);
+                    return new int[]{w, h};
+                }
+                if (segLen < 2) break;
+                p += 2 + segLen;
+            }
+            return new int[]{0, 0};
+        } catch (Throwable t) {
+            return new int[]{0, 0};
+        } finally {
+            if (raf != null) {
+                try {
+                    raf.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
+    private static int be32(byte[] b, int o) {
+        return ((b[o] & 0xff) << 24) | ((b[o + 1] & 0xff) << 16) | ((b[o + 2] & 0xff) << 8) | (b[o + 3] & 0xff);
+    }
+
+    private static int le16(byte[] b, int o) {
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8);
+    }
+
+    private static int le24(byte[] b, int o) {
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8) | ((b[o + 2] & 0xff) << 16);
+    }
+
+    private static int le32(byte[] b, int o) {
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8) | ((b[o + 2] & 0xff) << 16) | ((b[o + 3] & 0xff) << 24);
+    }
+
     private boolean inMusicDirs(File f) {
         List<String> dirs = cfg.musicDirs;
         if (dirs == null || dirs.isEmpty()) return true; // 没配就等于不限
@@ -8855,6 +9457,12 @@ public class HttpServer {
                 AppPrefs.setBookDirs(appCtx(), picked);
                 msg = "图书目录已保存：" + picked.size() + " 个";
                 log("管理页：图书目录设为 " + picked.size() + " 个");
+            } else if ("photo".equals(action)) {
+                List<String> picked = splitDirs(form.get("dirs"));
+                cfg.setPhotoDirs(picked);
+                AppPrefs.setPhotoDirs(appCtx(), picked);
+                msg = "相册目录已保存：" + picked.size() + " 个";
+                log("管理页：相册目录设为 " + picked.size() + " 个");
             } else if ("title".equals(action)) {
                 String t = form.containsKey("title") ? form.get("title") : "";
                 cfg.setTitle(t);
@@ -8939,6 +9547,12 @@ public class HttpServer {
                 AppPrefs.setBookDirs(appCtx(), picked);
                 log("客户端管理：图书目录设为 " + picked.size() + " 个");
                 sb.append("\"ok\":true,\"msg\":\"图书目录已保存：").append(picked.size()).append(" 个\"");
+            } else if ("photo".equals(action)) {
+                List<String> picked = splitDirs(form.get("dirs"));
+                cfg.setPhotoDirs(picked);
+                AppPrefs.setPhotoDirs(appCtx(), picked);
+                log("客户端管理：相册目录设为 " + picked.size() + " 个");
+                sb.append("\"ok\":true,\"msg\":\"相册目录已保存：").append(picked.size()).append(" 个\"");
             } else if ("title".equals(action)) {
                 String t = form.containsKey("title") ? form.get("title") : "";
                 cfg.setTitle(t);
@@ -8975,6 +9589,7 @@ public class HttpServer {
             sb.append(",\"musicDirs\":").append(jsonArr(cfg.musicDirs));
             sb.append(",\"videoDirs\":").append(jsonArr(cfg.videoDirs));
             sb.append(",\"bookDirs\":").append(jsonArr(cfg.bookDirs));
+            sb.append(",\"photoDirs\":").append(jsonArr(cfg.photoDirs));
             sb.append(",\"dirs\":").append(dirChoicesJson(candidateDirs()));
         }
         // 版本与自动更新状态不放在 isAdmin 分支里：
@@ -9387,6 +10002,17 @@ public class HttpServer {
                 cfg.bookDirs, cands, 160);
         sb.append("<div class='adm-act'><button class='adm-btn' type='submit'>保存图书目录</button>")
           .append("<span class='adm-cnt'>当前 ").append(cfg.bookDirs.size()).append(" 个</span>")
+          .append("</div></form>\n");
+
+        // ---- 相册目录 ----
+        sb.append("<form method='post' action='/_admin' class='adm-form'>")
+          .append("<input type='hidden' name='action' value='photo'>\n");
+        appendDirPicker(sb, "dirs", "相册目录",
+                "客户端「相册」页只显示这里的图。认 jpg/jpeg/png/webp/bmp/gif/heic；"
+                        + "不配就没有相册（不会去扫全盘找图，手机会被图标和缓存淹没）。",
+                cfg.photoDirs, cands, 160);
+        sb.append("<div class='adm-act'><button class='adm-btn' type='submit'>保存相册目录</button>")
+          .append("<span class='adm-cnt'>当前 ").append(cfg.photoDirs.size()).append(" 个</span>")
           .append("</div></form>\n");
 
         sb.append("</div>\n");   // adm-grid

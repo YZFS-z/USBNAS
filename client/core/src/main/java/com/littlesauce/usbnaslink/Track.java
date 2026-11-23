@@ -36,6 +36,12 @@ public final class Track {
      */
     public String cover = null;
 
+    /**
+     * 这首歌的文件里自带内嵌封面（服务端 JSON 的 {@code i} 键）。
+     * 为 true 时即使 {@link #cover} 为空也能向 {@code /cover} 要图。
+     */
+    public boolean embedded = false;
+
     public Track(String path, String name, String title, String dir, long size, long mtime) {
         this.path = path == null ? "" : path;
         this.name = name == null ? "" : name;
@@ -144,18 +150,26 @@ public final class Track {
         return lrcName != null && !lrcName.isEmpty();
     }
 
-    /** 有没有可用的封面图（服务端扫到了同名图或目录通用图） */
+    /** 有没有可用的封面图（服务端扫到了同名图/目录通用图，或文件自带内嵌封面） */
     public boolean hasCover() {
-        return cover != null && !cover.isEmpty();
+        return embedded || (cover != null && !cover.isEmpty());
     }
 
     /**
-     * 封面图直链。跟 {@link Music#audioUrl} 同一套路径编码，
-     * 图片走服务端普通的文件 GET，支持 Range/Cache-Control，客户端可以直接喂给图片库。
+     * 封面图直链。
+     *
+     * <p>三种来源按优先级：
+     * <ol>
+     *   <li>服务端扫到的同名图 / 目录通用图（{@link #cover}）——走普通文件 GET；</li>
+     *   <li>文件自带内嵌封面（{@link #embedded}）——走 {@code /cover?f=<音频路径>}，
+     *       服务端用 {@code CoverArt} 从 ID3 APIC / FLAC PICTURE 里抽出来；</li>
+     *   <li>都没有 → null，界面画自绘贴纸。</li>
+     * </ol>
      */
     public String coverUrl(String baseUrl) {
-        if (!hasCover()) return null;
-        return Music.audioUrl(baseUrl, cover);
+        if (cover != null && !cover.isEmpty()) return Music.audioUrl(baseUrl, cover);
+        if (embedded) return Music.coverUrl(baseUrl, path);
+        return null;
     }
 
     /** 搜索：标题、文件名、目录名、歌手、专辑任意命中 */

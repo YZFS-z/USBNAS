@@ -98,9 +98,29 @@ public final class Music {
         }
     }
 
+    /**
+     * 内嵌封面的直链：{@code /cover?f=<音频绝对路径>}。
+     *
+     * <p>服务端拿到 f 之后只允许「音乐目录里的音频文件」，用 {@code CoverArt}
+     * 从 ID3 APIC / FLAC PICTURE 里抽图，抽不到返回 404，
+     * 抽到带 ETag，客户端重复请求会命中 304。
+     *
+     * <p>为什么不直接把音频路径塞进普通文件 GET：音频有几十 MB，
+     * 让服务端只回图片才能让客户端把 ImageView 直接喂 URL。
+     */
+    public static String coverUrl(String baseUrl, String audioPath) {
+        if (audioPath == null || audioPath.isEmpty()) return null;
+        try {
+            // 这里要的是「整条路径当一个查询参数值」，所以 '/' 也必须编码成 %2F，
+            // 不能走 encodePath（那个保留 '/'，是给 path 段用的）。
+            return baseUrl + "/cover?f=" + pct(audioPath);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     /** 把绝对路径按段编码，保留 '/' —— 服务端的 resolve() 就是这么解回来的 */
-    private static String encodePath(String p) {
-        if (p == null || p.isEmpty()) return "";
+    private static String encodePath(String p) {        if (p == null || p.isEmpty()) return "";
         StringBuilder sb = new StringBuilder(p.length() + 16);
         boolean abs = p.charAt(0) == '/';
         for (String seg : p.split("/")) {
@@ -219,6 +239,10 @@ public final class Music {
                 // c：封面绝对路径。老服务端没有这个键 → 保持 null，播放页画贴纸
                 String cv = str(tm.get("c"));
                 if (cv != null && !cv.isEmpty()) tr.cover = cv;
+                // i：这首文件里带了内嵌封面（ID3 APIC / FLAC PICTURE）。
+                // 有它就走服务端 /cover 抽出来，不必依赖目录里有没有同名图。
+                Object emb = tm.get("i");
+                if (emb instanceof Number && ((Number) emb).intValue() != 0) tr.embedded = true;
                 lib.tracks.add(tr);
             }
         }
