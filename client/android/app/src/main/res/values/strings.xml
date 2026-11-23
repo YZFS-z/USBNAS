@@ -6,6 +6,7 @@
     <string name="rescan">重新扫描</string>
     <string name="empty">没有找到 NAS\n确认手机和 NAS 在同一个 Wi-Fi 下</string>
     <string name="manual">手动输入地址</string>
+    <string name="update">检查更新</string>
     <string name="library">媒体库</string>
     <string name="admin">管理设置</string>
     <string name="pdf_reader">PDF 阅读</string>

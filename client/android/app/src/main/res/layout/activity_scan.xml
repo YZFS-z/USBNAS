@@ -86,8 +86,11 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="@id/list" />
 
-    <!-- 底部只留两个主动作。原来四个：重新扫描 / 手动输入 / 媒体库 / 管理设置，
-         后两个和「点列表进媒体库」「媒体库页签里的管理设置」重复，删掉。 -->
+    <!-- 底部三个动作：重新扫描 / 手动输入 / 自动更新。
+         「媒体库」与「管理设置」原本也在这里，和「点列表进媒体库」「媒体库页签里的
+         管理设置」重复，已删。自动更新是唯一和「连哪台 NAS」无关的动作，但用户
+         在连不上 NAS 时最需要它（服务端升级后客户端不升级会握手失败），所以
+         留在首页底部，而不是藏进连上之后才进得去的设置页。 -->
     <LinearLayout
         android:id="@+id/bar"
         android:layout_width="0dp"
@@ -121,6 +124,20 @@
             android:text="@string/manual"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
+            android:textSize="14sp" />
+
+        <!-- 自动更新的入口。不叫「设置」：这个按钮点下去就是查版本 + 下载 + 装，
+             不是一个设置面板；叫「更新」才不会让人以为里面有开关。 -->
+        <Button
+            android:id="@+id/btnUpdate"
+            android:layout_width="0dp"
+            android:layout_height="46dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_btn_outline"
+            android:text="@string/update"
+            android:textAllCaps="false"
+            android:textColor="#8AB4F8"
             android:textSize="14sp" />
     </LinearLayout>
 

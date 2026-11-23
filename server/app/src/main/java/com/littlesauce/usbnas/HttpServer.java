@@ -7648,6 +7648,31 @@ public class HttpServer {
                     + ".adm-cp{color:#5d6773;font-size:11px;font-family:ui-monospace,monospace}"
                     + ".adm-cand.on .adm-cp{color:#7fb0e8}"
                     + ".adm-more{font-size:12px;color:#6b7480}"
+                    // ---- 目录树 ----
+                    // 候选目录以前是 flex-wrap 的标签块，40 个块平铺开，
+                    // DCIM/Camera 和 Music 看着同级，谁是谁的子目录只能读路径。
+                    // 现在按路径前缀折成树：缩进表示层级，▸/▾ 展开收起。
+                    + ".adm-tree{border:1px solid #232a34;border-radius:10px;background:#11161d;"
+                    + "padding:6px 4px;max-height:340px;overflow:auto;margin-bottom:10px}"
+                    + ".adm-tbar{display:flex;align-items:center;gap:14px;padding:4px 10px 8px;"
+                    + "border-bottom:1px solid #1d242e;margin-bottom:4px}"
+                    + ".adm-tcnt{font-size:11px;color:#6b7480;flex:1}"
+                    + ".adm-tgl{font-size:11px;color:#5aa9ff;cursor:pointer}"
+                    + ".adm-tgl:hover{color:#8ec5ff}"
+                    + ".adm-tn{display:flex;align-items:center;gap:6px;padding:4px 8px;"
+                    + "border-radius:7px;font-size:12px;color:#c3cad4}"
+                    + ".adm-tn:hover{background:#182029}"
+                    + ".adm-tn.on{background:#12253d;color:#cfe2ff}"
+                    + ".adm-tn input{margin:0;accent-color:#2f80ed;flex:none}"
+                    + ".adm-tw{width:13px;flex:none;color:#6b7480;cursor:pointer;text-align:center}"
+                    + ".adm-tw.leaf{cursor:default}"
+                    + ".adm-tl{font-weight:600;cursor:pointer;white-space:nowrap}"
+                    + ".adm-tw.leaf+.adm-tl{cursor:default}"
+                    + ".adm-tp{font-size:10px;color:#5d6773;font-family:ui-monospace,monospace;"
+                    + "margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+                    + ".adm-tc{font-size:10px;color:#ffc96b;border:1px solid #4a3f22;"
+                    + "border-radius:6px;padding:0 5px;margin-left:4px}"
+                    + ".adm-tk.hide{display:none}"
                     + ".adm-ta{width:100%;box-sizing:border-box;background:#11161d;"
                     + "border:1px solid #2a3340;border-radius:10px;color:#e6e9ef;"
                     + "padding:10px 12px;font-size:13px;line-height:1.7;outline:none;resize:vertical;"
@@ -7672,6 +7697,14 @@ public class HttpServer {
                     + "body.light .adm-cand.on{background:#e8f1ff;border-color:#2f80ed;color:#123a6b}"
                     + "body.light .adm-cp{color:#8a939d}"
                     + "body.light .adm-cand.on .adm-cp{color:#3a6ea8}"
+                    + "body.light .adm-tree{background:#fafbfc;border-color:#dbe0e7}"
+                    + "body.light .adm-tbar{border-color:#e6eaef}"
+                    + "body.light .adm-tn{color:#31363d}"
+                    + "body.light .adm-tn:hover{background:#eef2f7}"
+                    + "body.light .adm-tn.on{background:#e8f1ff;color:#123a6b}"
+                    + "body.light .adm-tp{color:#8a939d}"
+                    + "body.light .adm-tgl{color:#0b64c8}"
+                    + "body.light .adm-tc{color:#8a6100;border-color:#e2cf9c}"
                     + "body.light .adm-ta,body.light .adm-inp{background:#fafbfc;"
                     + "border-color:#d3dae3;color:#1b1f26}"
                     + "body.light .adm-note{background:#e8f7ee;border-color:#a9dcbd;color:#1c6b3e}"
@@ -7683,6 +7716,14 @@ public class HttpServer {
                     + "body.ink .adm-cand{background:#dedede;border-color:#c6c6c6;color:#3a3a3a}"
                     + "body.ink .adm-cand.on{background:#c4c4c4;border-color:#5e5e5e;color:#232323}"
                     + "body.ink .adm-cp{color:#7a7a7a}"
+                    + "body.ink .adm-tree{background:#e8e8e8;border-color:#c6c6c6}"
+                    + "body.ink .adm-tbar{border-color:#d2d2d2}"
+                    + "body.ink .adm-tn{color:#3a3a3a}"
+                    + "body.ink .adm-tn:hover{background:#dcdcdc}"
+                    + "body.ink .adm-tn.on{background:#c4c4c4;color:#232323}"
+                    + "body.ink .adm-tp{color:#7a7a7a}"
+                    + "body.ink .adm-tgl{color:#3f3f3f}"
+                    + "body.ink .adm-tc{color:#5e5e5e;border-color:#b8b8b8}"
                     + "body.ink .adm-ta,body.ink .adm-inp{background:#e8e8e8;"
                     + "border-color:#c6c6c6;color:#2b2b2b}"
                     + "body.ink .adm-btn{background:#5e5e5e;color:#f2f2f2}"
@@ -8991,6 +9032,31 @@ public class HttpServer {
     }
 
     /**
+     * 树上的一个节点。
+     *
+     * 候选列表本身是「各存储根下两层」的扁平数组，但管理页上要的是树：
+     *   /storage/emulated/0
+     *   /storage/emulated/0/DCIM
+     *   /storage/emulated/0/DCIM/Camera
+     * 平铺成 40 个标签块时，Camera 和 Music 看着是同级，谁属于谁全靠读路径。
+     * 这里按路径前缀重组成树，节点自己带 label 与深度，渲染层只管画。
+     */
+    private static final class DirNode {
+        final String path;
+        final String name;
+        final int depth;
+        boolean checked;
+        /** 已配置但候选里没有这个目录：标出来，免得用户以为配置丢了 */
+        boolean configuredOnly;
+        final List<DirNode> kids = new ArrayList<>();
+        DirNode(String path, String name, int depth) {
+            this.path = path;
+            this.name = name;
+            this.depth = depth;
+        }
+    }
+
+    /**
      * 列出「可能想选」的目录：各存储根下的两层子目录。
      *
      * 只下探两层是刻意的 —— 全盘递归枚举在机械盘上要几十秒，管理页打开
@@ -9031,38 +9097,205 @@ public class HttpServer {
         return out;
     }
 
-    /** 把已配目录渲染成「候选勾选框 + 手写文本框」两块 */
+    /**
+     * 把扁平候选列表折成树。
+     *
+     * 根键规则要与客户端 DirTree.rootKeyOf() 一致：/storage/emulated/0 与
+     * /mnt/media_rw/XXXX 都整体当一个根，否则内部存储会被拆成
+     * storage → emulated → 0 三层，点开三次才看到一个目录。
+     */
+    private List<DirNode> buildDirTree(List<DirChoice> cands, List<String> current) {
+        List<DirNode> roots = new ArrayList<>();
+        java.util.Map<String, DirNode> index = new java.util.HashMap<>();
+
+        for (DirChoice c : cands) {
+            String path = c.path;
+            if (path == null || path.isEmpty()) continue;
+            String rk = dirRootKey(path);
+            DirNode root = index.get(rk);
+            if (root == null) {
+                String rn = dirRootLabel(rk, c.label);
+                root = new DirNode(rk, rn, 0);
+                index.put(rk, root);
+                roots.add(root);
+            }
+            if (path.equals(rk)) continue;
+            // 逐段建链：/storage/emulated/0/DCIM/Camera → 先保 DCIM 再挂 Camera
+            String acc = rk;
+            DirNode parent = root;
+            String[] seg = path.substring(Math.min(path.length(), rk.length()))
+                    .split("/");
+            for (String s : seg) {
+                if (s.isEmpty()) continue;
+                acc = acc + "/" + s;
+                DirNode n = index.get(acc);
+                if (n == null) {
+                    n = new DirNode(acc, s, parent.depth + 1);
+                    index.put(acc, n);
+                    parent.kids.add(n);
+                }
+                parent = n;
+            }
+        }
+
+        // 配置里有、候选里没有的路径：补成一支并标出来。之前这种情况在网页上
+        // 完全看不到（文本框里有，勾选列表里没有），管理员会以为没保存成功。
+        if (current != null) {
+            for (String raw : current) {
+                if (raw == null) continue;
+                String p = raw.trim();
+                while (p.length() > 1 && p.endsWith("/")) p = p.substring(0, p.length() - 1);
+                if (p.isEmpty()) continue;
+                if (index.containsKey(p)) {
+                    index.get(p).checked = true;
+                    continue;
+                }
+                String rk = dirRootKey(p);
+                DirNode root = index.get(rk);
+                if (root == null) {
+                    root = new DirNode(rk, dirRootLabel(rk, ""), 0);
+                    index.put(rk, root);
+                    roots.add(root);
+                }
+                DirNode n = new DirNode(p, dirLastSeg(p), root.depth + 1);
+                n.configuredOnly = true;
+                n.checked = true;
+                root.kids.add(n);
+                index.put(p, n);
+            }
+        }
+
+        // 勾了父级就不必再显示子级的勾 —— 子级全部跟着亮，页面会像一片蓝
+        for (DirNode r : roots) pruneChecked(r);
+        for (DirNode r : roots) sortTree(r);
+        return roots;
+    }
+
+    /** 父级已勾选时，子级的 checked 归零（值仍由文本框决定） */
+    private void pruneChecked(DirNode n) {
+        for (DirNode k : n.kids) {
+            if (n.checked) k.checked = false;
+            pruneChecked(k);
+        }
+    }
+
+    private void sortTree(DirNode n) {
+        java.util.Collections.sort(n.kids, new java.util.Comparator<DirNode>() {
+            public int compare(DirNode a, DirNode b) {
+                return a.name.compareToIgnoreCase(b.name);
+            }
+        });
+        for (DirNode k : n.kids) sortTree(k);
+    }
+
+    /** /storage/emulated/0 与 /mnt/media_rw/XXXX 整体当根 */
+    private static String dirRootKey(String path) {
+        String p = path;
+        if (p.startsWith("/storage/emulated/") && p.length() > "/storage/emulated/0".length()) {
+            int i = p.indexOf('/', "/storage/emulated/".length());
+            return i < 0 ? p : p.substring(0, i);
+        }
+        if (p.startsWith("/mnt/")) {
+            int a = p.indexOf('/', 5);
+            if (a < 0) return p;
+            int b = p.indexOf('/', a + 1);
+            return b < 0 ? p : p.substring(0, b);
+        }
+        int i = p.indexOf('/', 1);
+        return i < 0 ? p : p.substring(0, i);
+    }
+
+    private static String dirRootLabel(String key, String serverLabel) {
+        if (key.startsWith("/storage/emulated/")) return "内部存储";
+        if (key.startsWith("/mnt/media_rw/")) {
+            int i = key.lastIndexOf('/');
+            return "外部盘 " + key.substring(i + 1);
+        }
+        if (serverLabel != null && !serverLabel.isEmpty()) return serverLabel;
+        int i = key.lastIndexOf('/');
+        return i < 0 ? key : key.substring(i + 1);
+    }
+
+    private static String dirLastSeg(String p) {
+        int i = p.lastIndexOf('/');
+        return i < 0 ? p : p.substring(i + 1);
+    }
+
+    /** 渲染一棵树。默认只展开有勾选的那几支，其余收起。 */
+    private void appendDirNodes(StringBuilder sb, List<DirNode> nodes, java.util.Set<String> open) {
+        for (DirNode n : nodes) {
+            boolean hasKids = !n.kids.isEmpty();
+            boolean unfolded = open.contains(n.path);
+            sb.append("<div class='adm-tn").append(n.checked ? " on" : "")
+              .append(n.configuredOnly ? " cfg" : "")
+              .append("' style='padding-left:").append(8 + n.depth * 16).append("px'>")
+              .append("<span class='adm-tw").append(hasKids ? "" : " leaf").append("'")
+              .append(hasKids ? " data-toggle='" + esc(n.path) + "'" : "")
+              .append(">").append(hasKids ? (unfolded ? "▾" : "▸") : " ").append("</span>")
+              .append("<input type='checkbox' data-dir='").append(esc(n.path)).append("'")
+              .append(n.checked ? " checked" : "").append(">")
+              .append("<span class='adm-tl' data-toggle='").append(hasKids ? esc(n.path) : "")
+              .append("'>").append(esc(n.name)).append("</span>");
+            if (n.depth == 0) {
+                sb.append("<span class='adm-tp'>").append(esc(n.path)).append("</span>");
+            } else if (n.configuredOnly) {
+                sb.append("<span class='adm-tc'>已配置</span>");
+            }
+            sb.append("</div>\n");
+            if (hasKids) {
+                sb.append("<div class='adm-tk").append(unfolded ? "" : " hide")
+                  .append("' data-kids='").append(esc(n.path)).append("'>\n");
+                appendDirNodes(sb, n.kids, open);
+                sb.append("</div>\n");
+            }
+        }
+    }
+
+    /** 有勾选的节点及其祖先都要展开，否则用户一进来看不到自己配了什么 */
+    private void collectOpen(List<DirNode> nodes, List<String> current, java.util.Set<String> open) {
+        for (DirNode n : nodes) {
+            boolean hit = false;
+            for (String c : current) {
+                if (c == null) continue;
+                String p = c.trim();
+                if (p.equals(n.path) || p.startsWith(n.path + "/")) { hit = true; break; }
+            }
+            if (hit && !n.path.isEmpty()) open.add(n.path);
+            collectOpen(n.kids, current, open);
+        }
+    }
+
+    /** 把已配目录渲染成「目录树 + 手写文本框」两块 */
     private void appendDirPicker(StringBuilder sb, String name, String title, String hint,
                                  List<String> current, List<DirChoice> cands, int limit) {
         sb.append("<div class='adm-sect'>\n");
         sb.append("<div class='adm-h'>").append(esc(title)).append("</div>\n");
         sb.append("<div class='adm-hint'>").append(hint).append("</div>\n");
 
-        // 勾选框：勾了就等于把该路径写进下面文本框
-        sb.append("<div class='adm-cands'>\n");
-        int n = 0;
-        for (DirChoice d : cands) {
-            if (n++ >= limit) {
-                sb.append("<div class='adm-more'>候选过多，只列了前 ").append(limit)
-                  .append(" 个；其余请在下面手写</div>\n");
-                break;
-            }
-            boolean on = current.contains(d.path);
-            sb.append("<label class='adm-cand").append(on ? " on" : "").append("'>")
-              .append("<input type='checkbox' data-dir='").append(esc(d.path)).append("'")
-              .append(on ? " checked" : "").append(">")
-              .append("<span class='adm-cn'>").append(esc(d.label)).append("</span>")
-              .append("<span class='adm-cp'>").append(esc(d.path)).append("</span>")
-              .append("</label>\n");
-        }
-        if (cands.isEmpty()) {
-            sb.append("<div class='adm-more'>没找到可选的子目录，请直接手写路径</div>\n");
+        List<DirNode> tree = buildDirTree(cands, current);
+        java.util.Set<String> open = new java.util.HashSet<>();
+        collectOpen(tree, current, open);
+
+        // 一块都没选时整棵树是「全收起」，用户会以为没得选 —— 这种情况直接
+        // 把根节点全部展开（只展开根这一层，子目录仍然要自己点）。
+        boolean anyChecked = !current.isEmpty();
+        sb.append("<div class='adm-tree' data-all='").append(anyChecked ? "0" : "1").append("'>\n");
+        sb.append("<div class='adm-tbar'>")
+          .append("<span class='adm-tcnt'>已选 ").append(current.size()).append(" 个</span>")
+          .append("<span class='adm-tgl' data-act='all'>展开全部</span>")
+          .append("<span class='adm-tgl' data-act='none'>收起全部</span>")
+          .append("<span class='adm-tgl' data-act='sel'>只看已选</span>")
+          .append("</div>\n");
+        if (tree.isEmpty()) {
+            sb.append("<div class='adm-more'>服务端没列出候选目录，直接在下面的框里手写路径也行。</div>\n");
+        } else {
+            appendDirNodes(sb, tree, open);
         }
         sb.append("</div>\n");
 
-        // 手写文本框：一行一个；勾选框的 JS 只负责同步进这里，
+        // 手写文本框：一行一个；树上的勾只负责同步进这里，
         // 真正的存储格式以文本为准 —— 脚本没跑起来时文本框照样能提交。
-        sb.append("<textarea class='adm-ta' name='").append(name).append("' rows='5' ")
+        sb.append("<textarea class='adm-ta' name='").append(name).append("' rows='4' ")
           .append("placeholder='/storage/emulated/0/Music&#10;/mnt/media_rw/XXXX/电影'>")
           .append(esc(joinLines(current))).append("</textarea>\n");
         sb.append("</div>\n");
@@ -9195,27 +9428,71 @@ public class HttpServer {
         sb.append("<div class='adm-foot'>曲库、影视库与书库在修改后自动重扫，不用重启服务。</div>\n");
         sb.append("</div>\n");
 
-        // 勾选框 → 文本框同步。裸 IIFE 要自己包 <script>（这台设备上有壳浏览器
+        // 树上的勾 → 文本框同步。裸 IIFE 要自己包 <script>（这台设备上有壳浏览器
         // 不认 <script src> 之外的注入，包起来最稳）。
+        // 文本框始终是唯一数据源：树上勾的写进去，手改的读出来重标勾。
         sb.append("<script>\n(function(){\n")
-          .append("var tas=document.querySelectorAll('.adm-ta');\n")
-          .append("var boxes=document.querySelectorAll('.adm-cand input[type=checkbox]');\n")
           .append("function lines(t){var a=t.value.split('\\n'),o=[];for(var i=0;i<a.length;i++){")
           .append("var v=a[i].replace(/\\s+$/,'').replace(/^\\s+/,'');if(v)o.push(v);}return o;}\n")
-          .append("function syncAll(){\n")
-          .append("for(var i=0;i<tas.length;i++){var ta=tas[i];var form=ta.closest('form');")
-          .append("var bs=form?form.querySelectorAll('.adm-cand input[type=checkbox]'):[];")
-          .append("var set={};for(var j=0;j<bs.length;j++){if(bs[j].checked)set[bs[j].getAttribute('data-dir')]=1;}\n")
-          .append("var cur=lines(ta);var out=[];\n")
+          .append("function treeOf(el){return el.closest('.adm-tree');}\n")
+          .append("function taOf(el){var tr=treeOf(el);return tr?tr.parentNode.querySelector('.adm-ta'):null;}\n")
+          .append("function syncTree(tr){\n")
+          .append("var ta=taOf(tr);if(!ta)return;var cur=lines(ta);\n")
+          .append("var bs=tr.querySelectorAll('input[data-dir]');var set={};\n")
+          .append("for(var i=0;i<bs.length;i++){if(bs[i].checked)set[bs[i].getAttribute('data-dir')]=1;\n")
+          .append("var row=bs[i].parentNode;if(row&&row.classList){")
+          .append("if(bs[i].checked)row.classList.add('on');else row.classList.remove('on');}}\n")
+          .append("var out=[];\n")
           .append("for(var k=0;k<cur.length;k++){if(bs.length===0||set[cur[k]]){out.push(cur[k]);delete set[cur[k]];}}\n")
           .append("for(var d in set)out.push(d);\n")
-          .append("ta.value=out.join('\\n');}\n")
+          .append("ta.value=out.join('\\n');\n")
+          .append("var cnt=tr.querySelector('.adm-tcnt');if(cnt)cnt.textContent='已选 '+out.length+' 个';\n")
+          .append("}\n")
+          .append("function markFromText(tr){\n")
+          .append("var ta=taOf(tr);if(!ta)return;var cur=lines(ta);\n")
+          .append("var bs=tr.querySelectorAll('input[data-dir]');\n")
+          .append("for(var i=0;i<bs.length;i++){var p=bs[i].getAttribute('data-dir');\n")
+          .append("var on=false;for(var k=0;k<cur.length;k++){if(cur[k]===p){on=true;break;}}\n")
+          .append("bs[i].checked=on;\n")
+          .append("var row=bs[i].parentNode;if(row&&row.classList){")
+          .append("if(on)row.classList.add('on');else row.classList.remove('on');}}\n")
           .append("}\n")
           .append("document.addEventListener('change',function(e){\n")
           .append("var t=e.target;if(!t||t.type!=='checkbox')return;\n")
-          .append("var lab=t.parentNode;if(lab&&lab.classList){")
-          .append("if(t.checked)lab.classList.add('on');else lab.classList.remove('on');}\n")
-          .append("syncAll();\n")
+          .append("var tr=treeOf(t);if(!tr)return;syncTree(tr);\n")
+          .append("});\n")
+          .append("document.addEventListener('input',function(e){\n")
+          .append("var t=e.target;if(!t||!t.classList||!t.classList.contains('adm-ta'))return;\n")
+          .append("var tr=t.parentNode.querySelector('.adm-tree');if(tr)markFromText(tr);\n")
+          .append("});\n")
+          .append("document.addEventListener('click',function(e){\n")
+          .append("var t=e.target;if(!t||!t.getAttribute)return;\n")
+          .append("var tg=t.getAttribute('data-toggle');\n")
+          .append("if(tg!==null&&tg!==undefined&&tg!==''){\n")
+          .append("var tr=treeOf(t);if(!tr)return;\n")
+          .append("var kid=tr.querySelector('.adm-tk[data-kids=\"'+tg.replace(/\"/g,'')+'\"]');\n")
+          .append("if(!kid)return;kid.classList.toggle('hide');\n")
+          .append("var w=t.classList.contains('adm-tw')?t:t.parentNode.querySelector('.adm-tw');\n")
+          .append("if(w)w.textContent=kid.classList.contains('hide')?'\\u25B8':'\\u25BE';\n")
+          .append("return;}\n")
+          .append("if(!t.classList||t.getAttribute('data-act')===null)return;\n")
+          .append("var act=t.getAttribute('data-act');var tr=treeOf(t);if(!tr)return;\n")
+          .append("var kids=tr.querySelectorAll('.adm-tk');\n")
+          .append("var ws=tr.querySelectorAll('.adm-tw');\n")
+          .append("if(act==='all'){\n")
+          .append("for(var i=0;i<kids.length;i++)kids[i].classList.remove('hide');\n")
+          .append("for(var j=0;j<ws.length;j++){if(!ws[j].classList.contains('leaf'))ws[j].textContent='\\u25BE';}\n")
+          .append("}else if(act==='none'){\n")
+          .append("for(var i2=0;i2<kids.length;i2++)kids[i2].classList.add('hide');\n")
+          .append("for(var j2=0;j2<ws.length;j2++){if(!ws[j2].classList.contains('leaf'))ws[j2].textContent='\\u25B8';}\n")
+          .append("}else if(act==='sel'){\n")
+          .append("var rows=tr.querySelectorAll('.adm-tn');\n")
+          .append("for(var i3=0;i3<rows.length;i3++){")
+          .append("rows[i3].style.display=rows[i3].classList.contains('on')?'':'none';}\n")
+          .append("var on=t.getAttribute('data-done');\n")
+          .append("t.textContent=on?'只看已选':'显示全部';t.setAttribute('data-done',on?'':'1');\n")
+          .append("if(on){for(var i4=0;i4<rows.length;i4++)rows[i4].style.display='';}\n")
+          .append("}\n")
           .append("});\n")
           .append("})();\n</script>\n");
 

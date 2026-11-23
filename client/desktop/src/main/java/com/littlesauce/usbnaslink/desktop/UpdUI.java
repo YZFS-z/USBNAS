@@ -479,7 +479,7 @@ final class UpdUI {
 
     /** 版本号常量：与 build.ps1 里写进 jar 清单的 Implementation-Version 保持一致 */
     static final class Build {
-        static final String VERSION = "1.0.0";
+        static final String VERSION = "1.0.1";
 
         private Build() {}
     }

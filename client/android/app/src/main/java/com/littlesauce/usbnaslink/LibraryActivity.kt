@@ -72,6 +72,16 @@ class LibraryActivity : AppCompatActivity() {
 
     private var currentTab = 0
 
+    /**
+     * 「网页」在页签行里的下标。
+     *
+     * 它和其它页签长得一样、排在一起，但点它不换页（`selectTab(4)` 没有对应的
+     * 内容容器），而是直接调 `openWeb()` 交给系统浏览器。之所以做成页签而不是
+     * 顶栏按钮：顶栏那个按钮的字号/底色/高度跟下面一排页签都对不上，视觉上是
+     * 页面里最扎眼的一处不统一。
+     */
+    private val TAB_WEB = 4
+
     /** 音乐页当前视图：0 平铺 / 1 按歌手 / 2 按专辑（与桌面端同一套档位） */
     private var musicView = 0
     private val openedBuckets = HashSet<String>()
@@ -112,25 +122,27 @@ class LibraryActivity : AppCompatActivity() {
         })
         top.addView(titleBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        // 顶栏只剩「网页」一个入口。
-        // 「设置」按钮原来在顶栏、点了弹窗；现在它和 NAS 的站点/目录配置合并成
-        // 第四个页签「管理设置」，顶栏再放一个同名的按钮就变成两个「设置」——
-        // 这正是用户报的「按钮重名」问题。见 buildManage()。
-        val btnWeb = Palette.ghost(this, "网页", Palette.ACCENT_SOFT).apply {
-            setOnClickListener { openWeb() }
-        }
-        top.addView(btnWeb)
+        // 顶栏不再放按钮：原来这里有一个「网页」按钮，字号、底色、高度都和下面
+        // 一排页签不同，看上去像从别的 App 里剪过来贴上去的。
+        // 现在它变成第五个页签「网页」，和「影视 · 音乐 · 图书 · 管理设置」同高同宽
+        // 同字体，选中态也由同一套 Palette.tab/paintTab 画。
         root.addView(top)
 
         // --- 页签 ---
         // 选中态是「主色淡底 + 主色字 + 主色描边」，未选中是「近底灰 + 弱字」。
         // 之前三个页签只换文字、不换底色，屏幕上一排灰块，看不出在哪一页。
+        //
+        // 「网页」是第 5 个页签（下标 4）。它不是网页 View，点了直接开系统浏览器 ——
+        // 之所以还占一个页签位，是因为它和另外四个一样是「从这一页去看另一处东西」，
+        // 放在页签行里比在顶栏单独放一个按钮更容易被找到，也不再和顶栏标题抢宽度。
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(16), 0, dp(16), dp(8))
         }
-        for ((i, label) in listOf("影视", "音乐", "图书", "管理设置").withIndex()) {
-            val t = Palette.tab(this, label, false).apply { setOnClickListener { selectTab(i) } }
+        for ((i, label) in listOf("影视", "音乐", "图书", "管理设置", "网页").withIndex()) {
+            val t = Palette.tab(this, label, false).apply {
+                if (i == TAB_WEB) setOnClickListener { openWeb() } else setOnClickListener { selectTab(i) }
+            }
             tabViews.add(t)
             tabs.addView(t, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
                 if (i > 0) leftMargin = dp(8)
@@ -191,7 +203,11 @@ class LibraryActivity : AppCompatActivity() {
         if (idx == 3 && manageHost.childCount == 0) {
             buildManage()
         }
-        for ((i, t) in tabViews.withIndex()) Palette.paintTab(t, i == idx)
+        for ((i, t) in tabViews.withIndex()) {
+            // 「网页」页签永远不标选中：它不是一页内容，点完就跳浏览器再回来，
+            // 给它可以留下一个假的选中态会让用户以为停在了某个「网页页」上。
+            Palette.paintTab(t, i == idx && i != TAB_WEB)
+        }
         updateHint()
     }
 

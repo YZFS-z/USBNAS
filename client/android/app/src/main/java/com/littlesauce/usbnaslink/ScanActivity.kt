@@ -65,6 +65,12 @@ class ScanActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.btnRescan).setOnClickListener { startScan(true) }
         findViewById<View>(R.id.btnManual).setOnClickListener { askManual() }
+        // 自动更新放在首页底部：连不上 NAS 的时候最需要它（服务端升级后客户端
+        // 不跟着升，握手就对不上了），而这种时候进不去媒体库，藏在设置页里的
+        // 入口等于没有。manual=true 表示是用户主动点的，查不到新版本也要给回执。
+        findViewById<View>(R.id.btnUpdate).setOnClickListener {
+            ApkUpdater.checkOnStart(this, true)
+        }
         // 「媒体库」与「管理设置」两个按钮已删：点列表就是进媒体库，
         // 管理设置在媒体库的第四个页签里（站点名称/音乐/影视/图书目录 + App 自身设置），
         // 两处各留一份入口只会让同一个东西看起来像两个东西。
@@ -251,16 +257,27 @@ class ScanActivity : AppCompatActivity() {
         connectTo(only)
     }
 
+    /**
+     * 连上之后进的是**媒体库**，不是网页。
+     *
+     * 手机上影视/音乐/图书这三块原生页面比 WebView 好用得多（播放器、歌词、
+     * PDF 都在原生侧），所以卡片点下去直接进媒体库；网页版没有丢，媒体库
+     * 顶栏那个「网页」按钮就是它（BrowseActivity），只是从主入口降成副入口。
+     *
+     * 之前这里跳的是 BrowseActivity，而底部那个「媒体库」按钮被删掉了 ——
+     * 结果媒体库在 UI 上没有任何入口，只能 am start 硬拉。这里一并修掉。
+     */
     private fun connectTo(si: ServiceInfo) {
         prefs.lastUrl = si.baseUrl
         prefs.lastName = si.displayName()
-        val i = Intent(this, BrowseActivity::class.java)
-        i.putExtra(BrowseActivity.EXTRA_URL, si.baseUrl)
-        i.putExtra(BrowseActivity.EXTRA_NAME, si.displayName())
+        val i = Intent(this, LibraryActivity::class.java)
+        i.putExtra(LibraryActivity.EXTRA_URL, si.baseUrl)
+        i.putExtra(LibraryActivity.EXTRA_NAME, si.displayName())
+        i.putExtra(LibraryActivity.EXTRA_SID, prefs.sid)
         startActivity(i)
     }
 
-    /** 直接进媒体库：影视/音乐比网页更好点，所以给一个独立入口 */
+    /** 直接进媒体库：connectTo() 已改走这条路，保留给「手动输入成功后重进」用 */
     private fun openLibrary(url: String, name: String?) {
         val i = Intent(this, LibraryActivity::class.java)
         i.putExtra(LibraryActivity.EXTRA_URL, url)
