@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USBNAS Link</string>
+    <string name="scan_title">正在寻找 NAS</string>
+    <string name="scan_hint">自动扫描当前局域网…</string>
+    <string name="rescan">重新扫描</string>
+    <string name="empty">没有找到 NAS\n确认手机和 NAS 在同一个 Wi-Fi 下</string>
+    <string name="manual">手动输入地址</string>
+    <string name="library">媒体库</string>
+    <string name="admin">管理设置</string>
+    <string name="pdf_reader">PDF 阅读</string>
+    <string name="lyric_scrape">刮削歌词</string>
+    <string name="desktop_lyric">桌面歌词</string>
+    <string name="connect">连接</string>
+    <string name="open_in_browser">用浏览器打开</string>
+    <string name="login_title">登录</string>
+    <string name="login_user">用户名</string>
+    <string name="login_pass">密码</string>
+    <string name="login_ok">登录</string>
+    <string name="login_cancel">取消</string>
+</resources>

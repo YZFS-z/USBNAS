@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  启动图标。刻意全部走矢量 + 系统色，不引 mipmap 位图：
+  位图要在 mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi 五套里各放一份，改一次颜色要重导五张，
+  而这张图标就是「一个带信号弧的盒子」，矢量完全够用。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 底色圆角块 -->
+    <path
+        android:fillColor="#2F6FED"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- 主体：一个服务器机箱，暗示「NAS」 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,58h48a4,4 0 0 1 4,4v18a4,4 0 0 1 -4,4h-48a4,4 0 0 1 -4,-4v-18a4,4 0 0 1 4,-4z" />
+    <path
+        android:fillColor="#2F6FED"
+        android:pathData="M34,64h6v4h-6z" />
+    <path
+        android:fillColor="#2F6FED"
+        android:pathData="M34,73h6v4h-6z" />
+
+    <!-- 信号弧：三层，代表「自动发现局域网」 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,50m-4,0a4,4 0 1,0 8,0a4,4 0 1,0 -8,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M42,44a17,17 0 0 1 24,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M35,36a27,27 0 0 1 38,0" />
+</vector>

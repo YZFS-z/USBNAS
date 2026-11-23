@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    只对外开放一件事：缓存目录。
+
+    FileProvider 的路径表就是它的攻击面 —— root-path 或 files-path 一写，
+    任何拿到 content:// 的 App 都能顺着读私有文件。这里故意只给 cache-path，
+    因为自动更新的安装包就落在那儿（cache/update/usbnaslink-<版本>.apk）。
+
+    注意 name 里写的是相对 cache/ 的子目录；更新包在 cache/update/ 下，
+    所以对应 name="update"，拿到 URI 形如
+    content://com.littlesauce.usbnaslink.fileprovider/update/usbnaslink-1.0.1.apk
+-->
+<paths>
+    <cache-path
+        name="update"
+        path="update/" />
+</paths>

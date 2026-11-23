@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 服务停止时的圆点：灰 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <size
+        android:width="9dp"
+        android:height="9dp" />
+    <solid android:color="#8B949E" />
+</shape>

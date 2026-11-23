@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  横屏：两页翻页
+    第 1 页（概览）：内容由 MainActivity.buildHome() 固定生成
+                    左列【时间 · 二维码】，右列【服务状态 · 手机状态】
+    第 2 页（控制）：服务开关、账号、共享目录、运行日志
+  底部 pageBar 是翻页指示条，点按或左右滑动切换。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical"
+    tools:context=".MainActivity">
+
+    <!-- 站名不再做整条标题栏：它和「时间」一样是左列里的一张普通卡片，
+         由 MainActivity.buildHome() 动态生成，所以这里不写任何标题控件。 -->
+    <ViewFlipper
+        android:id="@+id/flipper"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- ================= 第 1 页：概览（动态生成） ================= -->
+        <LinearLayout
+            android:id="@+id/homeRoot"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:baselineAligned="false"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="10dp" />
+
+        <!-- ================= 第 2 页：控制 ================= -->
+        <ScrollView
+            android:id="@+id/colMain"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:saveEnabled="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <!-- 服务开关 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btnToggle"
+                        style="@style/BtnPrimary"
+                        android:layout_weight="1"
+                        android:text="启动服务" />
+
+                    <Button
+                        android:id="@+id/btnOpen"
+                        style="@style/BtnGhost"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:text="浏览器打开" />
+
+                    <Button
+                        android:id="@+id/btnTitle"
+                        style="@style/BtnGhost"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:text="站点名称" />
+                </LinearLayout>
+
+                <!--
+                    控制区的卡片排布（横屏 2400×992 可用）。
+                    v1 是三栏等宽 account/roots/perm，问题：
+                      · perm 栏纵向堆 4 个 48dp 按钮 → 整行被顶到 240dp
+                      · 三栏等宽后左栏只剩 ~330px，tvUsers 的
+                        「🔐 1 个账号 · 匿名可读」折行撑破卡片背景，左栏塌掉
+                    现在改成两行：
+                      第 1 行  账号（1fr）   |   共享目录（1.35fr）
+                      第 2 行  系统权限（2×2 横向排满整行）
+                    卡片高度差被压到最小，且每张卡都有足够宽度不折行。
+                -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:baselineAligned="false"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_card"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                style="@style/SectionTitle"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:text="账号与权限" />
+
+                            <Button
+                                android:id="@+id/btnUsers"
+                                style="@style/BtnTiny"
+                                android:text="管理" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvUsers"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textColor="@color/textDim"
+                            android:textIsSelectable="true"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1.35"
+                        android:background="@drawable/bg_card"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <TextView
+                            style="@style/SectionTitle"
+                            android:text="共享目录" />
+
+                        <TextView
+                            android:id="@+id/tvRoots"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:fontFamily="monospace"
+                            android:textColor="@color/textDim"
+                            android:textIsSelectable="true"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- 第 2 行：系统权限，四个按钮一行排开 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_card"
+                    android:baselineAligned="false"
+                    android:orientation="horizontal"
+                    android:padding="12dp">
+
+                    <TextView
+                        style="@style/SectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center_vertical"
+                        android:text="系统权限" />
+
+                    <Button
+                        android:id="@+id/btnPerm"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="14dp"
+                        android:layout_weight="1"
+                        android:text="存储权限" />
+
+                    <Button
+                        android:id="@+id/btnBattery"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="忽略电池优化" />
+
+                    <Button
+                        android:id="@+id/btnAntiBurn"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="防烧屏" />
+
+                    <Button
+                        android:id="@+id/btnScreenOff"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="立即熄屏" />
+                </LinearLayout>
+
+                <!-- 运行日志 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/SectionTitle"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:text="运行日志" />
+
+                    <Button
+                        android:id="@+id/btnClear"
+                        style="@style/BtnTiny"
+                        android:text="清空" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/scrollLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_marginTop="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_inset"
+                    android:saveEnabled="false">
+
+                    <TextView
+                        android:id="@+id/tvLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:lineSpacingExtra="3dp"
+                        android:padding="12dp"
+                        android:textColor="#7EE787"
+                        android:textIsSelectable="true"
+                        android:textSize="10sp" />
+                </ScrollView>
+            </LinearLayout>
+        </ScrollView>
+    </ViewFlipper>
+
+    <!-- 底部翻页指示条 -->
+    <LinearLayout
+        android:id="@+id/pageBar"
+        android:layout_width="match_parent"
+        android:layout_height="16dp"
+        android:background="@android:color/transparent"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/dot0"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_pill"
+            android:paddingStart="9dp"
+            android:paddingTop="0dp"
+            android:paddingEnd="9dp"
+            android:paddingBottom="0dp"
+            android:text="概览"
+            android:textColor="@color/accent"
+            android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/dot1"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:paddingStart="9dp"
+            android:paddingTop="1dp"
+            android:paddingEnd="9dp"
+            android:paddingBottom="1dp"
+            android:text="控制"
+            android:textColor="@color/textMute"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+</LinearLayout>

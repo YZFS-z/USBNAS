@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:orientation="horizontal"
+    android:paddingStart="24dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="24dp"
+    android:paddingBottom="14dp">
+
+    <!-- 左侧状态点：有 sid 变绿，需要登录变蓝，未知灰。纯代码着色，省一张图 -->
+    <View
+        android:id="@+id/dot"
+        android:layout_width="8dp"
+        android:layout_height="8dp"
+        android:layout_gravity="center_vertical"
+        android:layout_marginEnd="14dp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#101010"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            tools:text="一只肥鼠的NAS" />
+
+        <TextView
+            android:id="@+id/detail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#8A8A8A"
+            android:textSize="13sp"
+            tools:text="192.168.1.10:8080 · 12ms" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------- 构建产物
+build/
+out/
+dist/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.dex
+*.class
+*.log
+
+# jar 一律不进仓库，唯独 libs/ 下那两个 PDFium 封装是「源码级依赖」——
+# 它们的 POM 和 useAndroidX 打架（见 client/android/app/build.gradle.kts 的注释），
+# 只能用 files() 引本地 jar，所以必须提交。
+*.jar
+!client/android/app/libs/*.jar
+
+# 原生库：PDFium 的 .so 必须提交（自己编不出来，Maven 上的又和 support-v4 绑死）
+!client/android/app/src/main/jniLibs/**/*.so
+
+# VLC 运行时：108MB 的二进制，不进仓库
+vlc/
+
+# 发版暂存目录：产物往 GitHub Release 走，不进仓库
+_release/
+
+# ---------------------------------------------------------------- IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+.settings/
+
+# ---------------------------------------------------------------- 本机配置与密钥
+secrets/
+*.local
+.env
+keystore.properties
+*.jks
+*.keystore
+*.p12
+
+# ---------------------------------------------------------------- 杂项
+.DS_Store
+Thumbs.db
+cache/
+.tmp/
+*.bak

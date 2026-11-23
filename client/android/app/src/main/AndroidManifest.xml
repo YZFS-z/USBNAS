@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- 安卓 13+ 把 Wi-Fi 信息收紧到这个权限之下。局域网扫描需要读 SSID/IP，
+         但不需要定位，所以加 neverForLocation 表明用途。 -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
+    <!-- 组播收发（发现包的组播兜底）需要它，否则 MulticastSocket 拿不到包 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- 桌面歌词悬浮窗：只有用户到系统设置里单独授权过才生效，
+         没授权时按钮负责把人引过去，不申请就静默不做 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.USBNASLink"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".ScanActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".BrowseActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 媒体库：影视海报墙 + 歌单，数据来自服务端 /_videos 与 /_music -->
+        <activity
+            android:name=".LibraryActivity"
+            android:exported="false"
+            android:label="@string/library"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
+
+        <!-- 管理设置：只有服务端认定是管理员才解锁，权限判定只此一处 -->
+        <activity
+            android:name=".AdminActivity"
+            android:exported="false"
+            android:label="@string/admin"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 播放页：自己做 MediaPlayer 播放列表，歌词跟着进度走 -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
+
+        <!-- 视频内嵌播放：MediaPlayer + SurfaceView，横竖屏都自己处理 -->
+        <activity
+            android:name=".VideoPlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- 内嵌阅读：服务端抽好纯文本，这里只排版 -->
+        <activity
+            android:name=".BookReaderActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
+
+        <!-- 内嵌 PDF：PDFium 原生库按需渲染，几百页的扫描件也不用整个读进内存 -->
+        <activity
+            android:name=".PdfActivity"
+            android:exported="false"
+            android:label="@string/pdf_reader"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
+
+        <!--
+            自动更新的安装包要从 cache/update/ 交给系统安装器。
+            Android 7 起 file:// 的 URI 跨进程会抛 FileUriExposedException，
+            必须走 content://，所以这里挂一个只暴露 cache 目录的 FileProvider。
+            authorities 必须与 ApkUpdater.AUTHORITY 完全一致。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.littlesauce.usbnaslink.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

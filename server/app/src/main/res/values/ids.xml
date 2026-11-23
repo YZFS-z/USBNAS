@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dynamic view ids generated at runtime: no static node exists in layout -->
+    <item name="ivQrView" type="id" />
+    <item name="btnQrSwitch" type="id" />
+    <item name="tvQrHintView" type="id" />
+</resources>
