@@ -82,6 +82,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
+        // 界面建完再改模式，已画好的控件不会自己重算颜色。
+        ThemeCtl.prime(this)
 
         player = Player(this)
         player.listener = this

@@ -9,6 +9,10 @@ import androidx.recyclerview.widget.RecyclerView
 /**
  * 服务列表。条目极少（通常 1 个），所以不搞 DiffUtil/分页，
  * 直接 ArrayList + notifyDataSetChanged —— 简单到不会坏。
+ *
+ * 颜色全部现场取 Palette：`item_service.xml` 里的 #161B22 / #E6E9EF 只是
+ * 夜间默认值，日间模式下如果不在 onBind 里重涂一遍，就会出现
+ * 「浅底上一块深卡片」的割裂感。
  */
 class ServiceAdapter(
     private val onPick: (ServiceInfo) -> Unit,
@@ -63,6 +67,13 @@ class ServiceAdapter(
         }
         val ctx = holder.dot.context
         holder.dot.background = Palette.pill(ctx, dot, 7)
+
+        // 卡片底与文字也按当前主题重涂（XML 里是夜间的死色）
+        holder.itemView.background = Palette.round(ctx, Palette.CARD, 12f, Palette.LINE, 1f)
+        holder.name.setTextColor(Palette.FG)
+        holder.detail.setTextColor(Palette.DIM2)
+        holder.chevron.setTextColor(Palette.FAINT)
+
         holder.itemView.setOnClickListener { onPick(si) }
     }
 
@@ -70,5 +81,6 @@ class ServiceAdapter(
         val dot: View = v.findViewById(R.id.dot)
         val name: TextView = v.findViewById(R.id.name)
         val detail: TextView = v.findViewById(R.id.detail)
+        val chevron: TextView = v.findViewById(R.id.chevron)
     }
 }

@@ -10642,14 +10642,23 @@ public class HttpServer {
      * 而它们的配色既不能靠猜、也不能各存各的 —— 必须有一个共同的真源。真源选定在
      * 服务端（AppPrefs 的 theme 键），因为它就是这台 NAS 自身，所有客户端都连它。
      *
-     * 权限：读随便读（配色不是秘密）；写要求登录 —— 匿名能改会让「别人把你的
-     * 网页刷成日间」变成一个恶作剧入口。只读账号（LEVEL_READ）允许写：配色不涉及
-     * 任何数据，和「改站点名」不是一回事。
+     * 权限：读随便读（配色不是秘密）；写跟着 [Config.anonymousRead] 走 ——
+     *
+     * 最早写的是「写要求登录」，真机试出来不行：客户端（APK / exe）经常是
+     * 「连得上、没登录」的状态（服务端 session 是内存态，服务端一重启客户端
+     * 手里的 sid 就全失效了，而它并不会自己重登）。这时用户在 App 里点「日间」，
+     * 本地亮了、服务端没改，下一次 onResume 的 sync 又按服务端把它刷回夜间 ——
+     * 表现就是「点了一下，闪一下就变回去了」，非常像按钮坏了。
+     *
+     * 所以判据改成与「匿名能不能读」一致：既然这台 NAS 允许匿名浏览，那也允许
+     * 匿名换配色 —— 配色不涉及任何数据，被改成日间最多是「别人动过你的显示」，
+     * 再点一下就回来。反过来，若关了 anonymousRead，那写也一并要求登录。
+     * 只读账号（LEVEL_READ）始终允许写：配色和「改站点名」不是一回事。
      */
     private void handleTheme(Request req, InputStream in, OutputStream out) throws IOException {
         if ("POST".equalsIgnoreCase(req.method)) {
-            if (req.user == null && cfg.hasAccounts()) {
-                sendJson(out, "{\"ok\":false,\"error\":\"请先登录再改配色\"}");
+            if (req.user == null && cfg.hasAccounts() && !cfg.anonymousRead) {
+                sendJson(out, "{\"ok\":false,\"error\":\"这台 NAS 关了匿名访问，改配色要先登录\"}");
                 return;
             }
             Map<String, String> form = readForm(in, req.contentLength());

@@ -3,10 +3,12 @@ package com.littlesauce.usbnaslink
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -45,9 +47,15 @@ class ScanActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
+        // 界面建完再改模式，已画好的控件不会自己重算颜色。
+        ThemeCtl.prime(this)
         setContentView(R.layout.activity_scan)
-        // 扫描页现在是深色底 #0F141A（同 Palette.BG）：系统栏透明后看到的永远是它，
-        // tintBars 会按亮度自动选浅色图标。
+        // 布局里写的 #0F141A 是夜间底色，日间模式下得按 Palette.BG 重涂一次
+        // （XML 里的颜色是死的，不会跟着 Palette 走）。
+        findViewById<View>(R.id.scanRoot)?.setBackgroundColor(Palette.BG)
+        // 扫描页底色同 Palette.BG：系统栏透明后看到的永远是它，
+        // tintBars 会按亮度自动选图标深浅。
         Immersive.tintBars(this, Palette.BG)
         prefs = Prefs(this)
 
@@ -65,6 +73,7 @@ class ScanActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.btnRescan).setOnClickListener { startScan(true) }
         findViewById<View>(R.id.btnManual).setOnClickListener { askManual() }
+        repaintButtons()
         // 自动更新放在首页底部：连不上 NAS 的时候最需要它（服务端升级后客户端
         // 不跟着升，握手就对不上了），而这种时候进不去媒体库，藏在设置页里的
         // 入口等于没有。manual=true 表示是用户主动点的，查不到新版本也要给回执。
@@ -76,6 +85,32 @@ class ScanActivity : AppCompatActivity() {
         // 两处各留一份入口只会让同一个东西看起来像两个东西。
 
         askPermissionsThenStart()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 首页也要跟服务端对齐配色：用户可能在网页端改过（三端共用一个主题），
+        // 回首页时把本地缓存刷新一次；模式真变了才 recreate，否则不动。
+        val url = prefs.lastUrl ?: return
+        ThemeCtl.sync(this, url, prefs.sid) { recreate() }
+    }
+
+    /**
+     * 底部三个按钮的底与字按当前主题重涂。
+     *
+     * 布局里的 `bg_btn_outline`（#1B222C 底 + #232A34 描边）与文字色都是夜间死值，
+     * 日间模式下如果不动它们，浅底上会挂三块深色按钮。
+     */
+    private fun repaintButtons() {
+        val rescan = findViewById<Button>(R.id.btnRescan)
+        val manual = findViewById<Button>(R.id.btnManual)
+        val update = findViewById<Button>(R.id.btnUpdate)
+        rescan.background = Palette.round(this, Palette.BTN, 10f, Palette.LINE, 1f)
+        rescan.setTextColor(Palette.FG2)
+        update.background = Palette.round(this, Palette.BTN, 10f, Palette.LINE, 1f)
+        update.setTextColor(Palette.ACCENT_SOFT)
+        manual.background = Palette.round(this, Palette.ACCENT, 10f)
+        manual.setTextColor(Color.WHITE)
     }
 
     // ---------------------------------------------------------------- 权限

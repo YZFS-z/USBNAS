@@ -2,7 +2,6 @@ package com.littlesauce.usbnaslink
 
 import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.Executors
@@ -107,17 +106,19 @@ object ThemeCtl {
         }
     }
 
-    /** 让界面用新色重搭一次。 */
+    /**
+     * 让界面用新色重搭一次。
+     *
+     * 不能用 `startActivity(Intent(this, LibraryActivity))` 再 `finish()` 的方式重启：
+     * 那样会新开一个 Activity 实例压在同一个 task 里，返回键就会回到旧的那个
+     * （旧实例还留着旧色），而且从 ScanActivity 过来时 task 里已经有一层
+     * ScanActivity，一来一回点几次就会看到「点主题 → 界面退回到扫描页」。
+     *
+     * 正确做法是 `recreate()`：它复用同一个 ActivityRecord，栈不变、返回键行为不变，
+     * 只是把 onCreate 再跑一遍 —— 而 onCreate 里 `ThemeCtl.prime()` 会读到新色。
+     */
     fun rebuild(activity: Activity) {
-        val it = activity.intent
-        val again = Intent(it).apply {
-            // 重建要带上原来的参数，否则打开网页页签的那几个 Activity 回来会是一张白页
-            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-        }
-        activity.startActivity(again)
-        activity.overridePendingTransition(0, 0)
-        activity.finish()
-        activity.overridePendingTransition(0, 0)
+        activity.recreate()
     }
 
     /** 按钮文案：点一下能切到哪。与网页端 `themeButton` 的语义一致。 */

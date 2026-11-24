@@ -162,7 +162,11 @@ class LibraryActivity : AppCompatActivity() {
         // 已建好的 View 不会自己变），同时把新值 POST 给服务端 `/_theme`，
         // 让同一台设备的网页端下次打开也是这个色。
         themeBtn = Palette.ghost(this, ThemeCtl.label()).apply {
-            setOnClickListener { ThemeCtl.toggle(this@LibraryActivity, baseUrl, sid) { msg(it) } }
+            setOnClickListener {
+                android.util.Log.i("USBNASLink", "theme click, now=" + Palette.mode +
+                        " day=" + Palette.isDay() + " base=" + baseUrl + " sid=" + sid)
+                ThemeCtl.toggle(this@LibraryActivity, baseUrl, sid) { toast(it) }
+            }
         }
         top.addView(themeBtn, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { rightMargin = dp(4) })
@@ -332,7 +336,7 @@ class LibraryActivity : AppCompatActivity() {
         spinner.visibility = View.VISIBLE
         val base = baseUrl
         val ck = sid
-        io.execute {
+        post {
             val v = VideoLib.fetch(base, ck, null, 15000)
             val m = Music.fetch(base, ck, 15000)
             val b = BookLib.fetch(base, ck, null, 15000)
@@ -449,7 +453,7 @@ class LibraryActivity : AppCompatActivity() {
         }
         val base = baseUrl
         val ck = sid
-        io.execute {
+        post {
             val meta = VideoLib.fetchMeta(base, ck, v.path, 12000)
             val poster = meta?.posterUrl
             val bmp = if (poster.isNullOrEmpty())
@@ -778,7 +782,7 @@ class LibraryActivity : AppCompatActivity() {
         photoHost.addView(msg("相册加载中…"))
         val base = baseUrl
         val ck = sid
-        io.execute {
+        post {
             val lib = PhotoLib.fetch(base, ck, null, 15000)
             ui.post {
                 plib = lib
@@ -976,7 +980,7 @@ class LibraryActivity : AppCompatActivity() {
         val base = baseUrl
         val ck = sid
         msg("正在删除 ${picks.size} 张…")
-        io.execute {
+        post {
             var done = 0
             var failed = 0
             var lastErr: String? = null
@@ -1083,7 +1087,7 @@ class LibraryActivity : AppCompatActivity() {
             img.setImageBitmap(hit)
         } else {
             img.setImageBitmap(null)
-            io.execute {
+            post {
                 val bmp = fetchImage(url, ck)
                 ui.post {
                     posterCache[key] = bmp
@@ -1262,7 +1266,7 @@ class LibraryActivity : AppCompatActivity() {
             return
         }
         val url = PhotoLib.imageUrl(baseUrl, p.path)
-        io.execute {
+        post {
             // 全屏图要看细节，不能沿用缩略图的采样，单独按原图解一次
             val bmp = fetchImageFull(url, ck)
             ui.post {
@@ -1705,7 +1709,7 @@ class LibraryActivity : AppCompatActivity() {
         }
         val base = baseUrl
         val ck = sid
-        adminIo.execute {
+        adminPost {
             val r = try {
                 when (label) {
                     "建号" -> Admin.addAccount(base, ck, name, pw, level, 9000)
@@ -1748,7 +1752,7 @@ class LibraryActivity : AppCompatActivity() {
         if (baseUrl.isEmpty()) return
         val base = baseUrl
         val ck = sid
-        adminIo.execute {
+        adminPost {
             val st = try {
                 Admin.fetch(base, ck, 9000)
             } catch (t: Throwable) {
@@ -1937,7 +1941,7 @@ class LibraryActivity : AppCompatActivity() {
         val base = baseUrl
         val ck = sid
         val dirs = value.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        adminIo.execute {
+        adminPost {
             val r = try {
                 when (action) {
                     "title" -> Admin.saveTitle(base, ck, value, 9000)
@@ -1991,8 +1995,37 @@ class LibraryActivity : AppCompatActivity() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
+        // 先立旗再关池：recreate()（切换主题）和正常退出都会走到这里，
+        // 但已经在路上的 ui.post 回调还会跑一轮 —— 那时候 io 已经 Terminated，
+        // 往里面 execute 会抛 RejectedExecutionException 直接把进程带走
+        // （实测在 buildVideos → loadPoster 这条链上炸过）。
+        dead = true
         io.shutdownNow()
         adminIo.shutdownNow()
         super.onDestroy()
+    }
+
+    /** 这个实例是否已销毁。销毁后一切后台提交都要静默丢弃。 */
+    @Volatile
+    private var dead = false
+
+    /** 安全提交：池已关闭就当作没这回事，别让界面收尾阶段把进程炸了。 */
+    private fun post(work: () -> Unit) {
+        if (dead) return
+        try {
+            io.execute(work)
+        } catch (ignored: java.util.concurrent.RejectedExecutionException) {
+            // recreate/shutdown 期间的迟到任务，丢掉即可
+        }
+    }
+
+    /** 管理页那条 IO 池的安全提交，理由同 post()。 */
+    private fun adminPost(work: () -> Unit) {
+        if (dead) return
+        try {
+            adminIo.execute(work)
+        } catch (ignored: java.util.concurrent.RejectedExecutionException) {
+            // 同上
+        }
     }
 }
