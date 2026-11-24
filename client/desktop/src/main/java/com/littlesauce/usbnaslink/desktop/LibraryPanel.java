@@ -81,11 +81,14 @@ final class LibraryPanel extends JPanel {
         setBorder(new EmptyBorder(8, 10, 8, 10));
 
         JPanel top = new JPanel(new BorderLayout(8, 0));
+        top.setOpaque(false);
         JLabel t = new JLabel("媒体库");
-        t.setFont(t.getFont().deriveFont(Font.BOLD, 15f));
+        t.setFont(Theme.bold(15));
+        t.setForeground(Theme.FG_TITLE);
         top.add(t, BorderLayout.WEST);
 
         filter.setToolTipText("按片名 / 歌手 / 目录过滤");
+        Theme.styleInput(filter);
         filter.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
                 rebuildSoon();
@@ -133,7 +136,7 @@ final class LibraryPanel extends JPanel {
         tabs.addChangeListener(e -> rebuild());
 
         hint.setForeground(Theme.FG_DIM);
-        hint.setFont(hint.getFont().deriveFont(11f));
+        hint.setFont(Theme.ui(11));
         hint.setBorder(new EmptyBorder(2, 2, 0, 2));
 
         add(top, BorderLayout.NORTH);
@@ -160,7 +163,7 @@ final class LibraryPanel extends JPanel {
             final int idx = i;
             // 三档都用 ghost：只用字重和颜色表示选中，比三块实心蓝按钮安静得多
             final JButton b = Theme.ghost(names[i]);
-            b.setFont(b.getFont().deriveFont(11.5f));
+            b.setFont(Theme.ui(12));
             b.addActionListener(e -> {
                 musicView = idx;
                 openedBuckets.clear();
@@ -169,7 +172,7 @@ final class LibraryPanel extends JPanel {
             bar.add(b);
         }
         JButton fold = Theme.ghost("全部收起");
-        fold.setFont(fold.getFont().deriveFont(11.5f));
+            fold.setFont(Theme.ui(12));
         fold.setToolTipText("把展开的歌手/专辑都折回去，回到只剩名字的一屏");
         fold.addActionListener(e -> {
             openedBuckets.clear();
@@ -190,7 +193,7 @@ final class LibraryPanel extends JPanel {
             int idx = "平铺".equals(t) ? 0 : "按歌手".equals(t) ? 1 : "按专辑".equals(t) ? 2 : -1;
             if (idx < 0) continue;   // 「全部收起」不是档位
             boolean on = idx == musicView;
-            b.setFont(b.getFont().deriveFont(on ? Font.BOLD : Font.PLAIN, 11.5f));
+            b.setFont(on ? Theme.bold(12) : Theme.ui(12));
             b.setForeground(on ? Color.WHITE : Theme.FG_SUB);
         }
     }
@@ -330,11 +333,11 @@ final class LibraryPanel extends JPanel {
             head.setBackground(Theme.BG_HOVER);
             head.setBorder(new EmptyBorder(9, 12, 9, 12));
             JLabel hl = new JLabel(g.label);
-            hl.setFont(hl.getFont().deriveFont(Font.BOLD, 13f));
+        hl.setFont(Theme.bold(13));
             hl.setForeground(Theme.FG_TITLE);
             head.add(hl, BorderLayout.WEST);
             JLabel hr = new JLabel(in.size() + " 部   " + g.path);
-            hr.setFont(hr.getFont().deriveFont(11f));
+        hr.setFont(Theme.ui(11));
             hr.setForeground(Theme.FG_MUTE);
             head.add(hr, BorderLayout.EAST);
             head.setAlignmentX(LEFT_ALIGNMENT);
@@ -388,14 +391,14 @@ final class LibraryPanel extends JPanel {
 
             String title = v.title == null || v.title.isEmpty() ? trimExt(v.name) : v.title;
             JLabel nm = new JLabel(shorten(title, 13));
-            nm.setFont(nm.getFont().deriveFont(Font.BOLD, 11f));
+        nm.setFont(Theme.bold(11));
             nm.setForeground(Theme.FG_TEXT);
             nm.setBorder(new EmptyBorder(0, 5, 0, 5));
             nm.setToolTipText(v.path);
 
             String tg = v.isTv() ? ("TV " + v.tag()) : trimExt(v.name);
             JLabel tag = new JLabel(shorten(tg, 16));
-            tag.setFont(tag.getFont().deriveFont(9.5f));
+        tag.setFont(Theme.ui(10));
             tag.setForeground(Theme.FG_MUTE);
             tag.setBorder(new EmptyBorder(0, 5, 3, 5));
 
@@ -566,13 +569,12 @@ final class LibraryPanel extends JPanel {
         isp.getViewport().setBackground(Theme.BG_DEEP);
         box.add(isp, BorderLayout.CENTER);
 
-        Object[] opts = {"播放", "在网页打开", "关闭"};
         Window owner = SwingUtilities.getWindowAncestor(this);
-        int r = JOptionPane.showOptionDialog(owner, box, "影片信息",
-                JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, opts, opts[0]);
-        if (r == 0) {
+        Integer r = Theme.options(owner, "影片信息", null, box,
+                new String[]{"播放", "在网页打开", "关闭"});
+        if (r != null && r == 0) {
             h.onPlayVideo(v, m);
-        } else if (r == 1) {
+        } else if (r != null && r == 1) {
             h.onOpenPage(baseUrl + "/play/video?f=" + pct(v.path));
         }
     }
@@ -696,11 +698,11 @@ final class LibraryPanel extends JPanel {
         head.setBackground(Theme.BG_HOVER);
         head.setBorder(new EmptyBorder(8, 12, 8, 12));
         JLabel hl = new JLabel((arrow == null ? "" : arrow + "  ") + name);
-        hl.setFont(hl.getFont().deriveFont(Font.BOLD, 12.5f));
+        hl.setFont(Theme.bold(13));
         hl.setForeground(arrow == null ? Theme.FG_TITLE : Theme.BRAND_LINK);
         head.add(hl, BorderLayout.WEST);
         JLabel hr = new JLabel(right == null ? "" : right);
-        hr.setFont(hr.getFont().deriveFont(11f));
+        hr.setFont(Theme.ui(11));
         hr.setForeground(Theme.FG_MUTE);
         head.add(hr, BorderLayout.EAST);
         head.setAlignmentX(LEFT_ALIGNMENT);
@@ -755,7 +757,7 @@ final class LibraryPanel extends JPanel {
         row.setAlignmentX(LEFT_ALIGNMENT);
 
         JLabel n = new JLabel("♪  " + t.displayTitle());
-        n.setFont(n.getFont().deriveFont(12f));
+        n.setFont(Theme.ui(12));
         n.setForeground(Theme.FG_TEXT);
         n.setToolTipText(t.path);
         row.add(n, BorderLayout.CENTER);
@@ -768,7 +770,7 @@ final class LibraryPanel extends JPanel {
             sub = shorten(al, 18) + "    " + sub;
         }
         JLabel sz = new JLabel(sub);
-        sz.setFont(sz.getFont().deriveFont(10f));
+        sz.setFont(Theme.ui(10));
         sz.setForeground(Theme.FG_MUTE);
         row.add(sz, BorderLayout.EAST);
 
@@ -838,11 +840,11 @@ final class LibraryPanel extends JPanel {
             head.setBackground(Theme.BG_HOVER);
             head.setBorder(new EmptyBorder(8, 12, 8, 12));
             JLabel hl = new JLabel(folderName(en.getKey()));
-            hl.setFont(hl.getFont().deriveFont(Font.BOLD, 12.5f));
+        hl.setFont(Theme.bold(13));
             hl.setForeground(Theme.FG_TITLE);
             head.add(hl, BorderLayout.WEST);
             JLabel hr = new JLabel(en.getValue().size() + " 本");
-            hr.setFont(hr.getFont().deriveFont(11f));
+        hr.setFont(Theme.ui(11));
             hr.setForeground(Theme.FG_MUTE);
             head.add(hr, BorderLayout.EAST);
             head.setAlignmentX(LEFT_ALIGNMENT);
@@ -859,13 +861,13 @@ final class LibraryPanel extends JPanel {
 
                 String label = b.title == null || b.title.isEmpty() ? trimExt(b.name) : b.title;
                 JLabel n = new JLabel("📖  " + label);
-                n.setFont(n.getFont().deriveFont(12f));
+        n.setFont(Theme.ui(12));
                 n.setForeground(Theme.FG_TEXT);
                 n.setToolTipText(b.path);
                 row.add(n, BorderLayout.CENTER);
 
                 JLabel meta = new JLabel(b.tag() + "    " + Music.humanSize(b.size));
-                meta.setFont(meta.getFont().deriveFont(10f));
+        meta.setFont(Theme.ui(10));
                 meta.setForeground(Theme.FG_MUTE);
                 row.add(meta, BorderLayout.EAST);
 

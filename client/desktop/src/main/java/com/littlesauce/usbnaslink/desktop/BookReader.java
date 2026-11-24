@@ -111,6 +111,9 @@ final class BookReader extends JPanel {
         busy.setVisible(false);
         busy.setBorderPainted(false);
         busy.setPreferredSize(new Dimension(100, 3));
+        // 走 Theme 那一套（底色 BG_CARD、进度 BRAND），和播放页/主界面同一条蓝
+        Theme.progress(busy);
+        busy.setStringPainted(false);
 
         stack.add(hint, "hint");
         stack.add(content, "content");

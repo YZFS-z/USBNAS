@@ -3,9 +3,11 @@ package com.littlesauce.usbnaslink;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -166,6 +168,41 @@ public final class Music {
 
     static String readAllPublic(InputStream in, int limit) throws IOException {
         return readAll(in, limit);
+    }
+
+    /**
+     * 表单 POST 的公开入口（给 {@link ThemeLib} 这类同包的轻量模块用）。
+     *
+     * <p>为什么单独开一个、不直接复用 {@link #openPublic}：POST 要多写两件事 ——
+     * {@code doOutput} 和 {@code Content-Length}（不发长度时服务端 readForm() 拿不到
+     * 表单，会退化成空 Map，表现为「参数全都丢了」但 HTTP 200）。这里一次做对。
+     *
+     * @param body 已编码好的 {@code k=v&k=v}（用 {@link Session#encode} 生成）
+     */
+    static String postFormPublic(String url, String cookie, String body, int timeoutMs) throws IOException {
+        byte[] b = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
+        HttpURLConnection c = open(url, cookie, timeoutMs);
+        try {
+            c.setRequestMethod("POST");
+            c.setInstanceFollowRedirects(false);
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8");
+            c.setFixedLengthStreamingMode(b.length);
+            OutputStream o = c.getOutputStream();
+            o.write(b);
+            o.flush();
+            o.close();
+            int code = c.getResponseCode();
+            InputStream in = (code >= 400) ? c.getErrorStream() : c.getInputStream();
+            if (in == null) return "";
+            try {
+                return readAll(in, 4 * 1024 * 1024);
+            } finally {
+                in.close();
+            }
+        } finally {
+            c.disconnect();
+        }
     }
 
     private static HttpURLConnection open(String url, String cookie, int timeoutMs) throws IOException {

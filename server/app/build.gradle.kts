@@ -11,8 +11,8 @@ android {
         applicationId = "com.littlesauce.usbnas"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.0.4"
+        versionCode = 5
+        versionName = "1.0.5"
     }
 
     tasks.withType<JavaCompile>().configureEach {

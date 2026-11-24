@@ -49,6 +49,29 @@ public final class Admin {
         public final List<String> photoDirs = new ArrayList<>();
         /** 候选目录（各存储根下两层），由服务端枚举，客户端不必拉全盘 */
         public final List<DirChoice> choices = new ArrayList<>();
+        /**
+         * 账号清单（服务端 1.0.5 起，只有管理员拿得到）。
+         * 旧服务端不返回这个字段，列表留空即可，界面自然显示「没有其他账号」。
+         */
+        public final List<Account> accounts = new ArrayList<>();
+    }
+
+    /** 服务端上的一个账号 */
+    public static final class Account {
+        public String name = "";
+        public int level = -1;
+        public String levelName = "";
+        /** 这个账号当前有几个活着的会话（网页/客户端各算一个） */
+        public int online;
+        /** 是不是当前登录的这个人 */
+        public boolean me;
+        /** 是否被限定在部分目录里（只对读写等级有意义） */
+        public boolean scoped;
+
+        @Override
+        public String toString() {
+            return name;
+        }
     }
 
     /** 一次保存的结果 */
@@ -97,6 +120,22 @@ public final class Admin {
                     if (!ch.path.isEmpty()) st.choices.add(ch);
                 }
             }
+
+            Object us = m.get("users");
+            if (us instanceof List) {
+                for (Object o : (List<?>) us) {
+                    if (!(o instanceof Map)) continue;
+                    Map<?, ?> d = (Map<?, ?>) o;
+                    Account a = new Account();
+                    a.name = str(d.get("name"));
+                    a.level = (int) num(d.get("level"));
+                    a.levelName = str(d.get("levelName"));
+                    a.online = (int) num(d.get("online"));
+                    a.me = bool(d.get("me"));
+                    a.scoped = bool(d.get("scoped"));
+                    if (!a.name.isEmpty()) st.accounts.add(a);
+                }
+            }
             return st;
         } catch (Throwable t) {
             st.error = String.valueOf(t);
@@ -133,6 +172,82 @@ public final class Admin {
      */
     public static Saved savePhotoDirs(String baseUrl, String cookie, List<String> dirs, int timeoutMs) {
         return post(baseUrl, cookie, "photo", "dirs", joinLines(dirs), timeoutMs);
+    }
+
+    // ==================== 账号管理 ====================
+    // 三条保护（不能删自己 / 不能把自己降级 / 不能删掉最后一个管理员）都在
+    // 服务端做，客户端只负责把服务端的原话显示出来 —— 保护逻辑只有一份。
+
+    /** 建号。password 必须非空。 */
+    public static Saved addAccount(String baseUrl, String cookie, String name,
+                                   String password, int level, int timeoutMs) {
+        return postMulti(baseUrl, cookie, timeoutMs, new String[][]{
+                {"action", "useradd"}, {"name", name}, {"password", password},
+                {"level", String.valueOf(level)}});
+    }
+
+    /** 改等级 / 改密码。password 传空表示不改密码。 */
+    public static Saved setAccount(String baseUrl, String cookie, String name,
+                                   String password, int level, int timeoutMs) {
+        return postMulti(baseUrl, cookie, timeoutMs, new String[][]{
+                {"action", "userset"}, {"name", name}, {"password", password},
+                {"level", String.valueOf(level)}});
+    }
+
+    /** 删号 */
+    public static Saved removeAccount(String baseUrl, String cookie, String name, int timeoutMs) {
+        return postMulti(baseUrl, cookie, timeoutMs,
+                new String[][]{{"action", "userdel"}, {"name", name}});
+    }
+
+    /** 踢下线（保留账号，只让已登录的会话失效） */
+    public static Saved kickAccount(String baseUrl, String cookie, String name, int timeoutMs) {
+        return postMulti(baseUrl, cookie, timeoutMs,
+                new String[][]{{"action", "userkick"}, {"name", name}});
+    }
+
+    /** 多字段表单 POST；失败一律折成 Saved.error，调用方只判 ok */
+    private static Saved postMulti(String baseUrl, String cookie, int timeoutMs, String[][] kv) {
+        Saved out = new Saved();
+        try {
+            StringBuilder body = new StringBuilder();
+            for (String[] p : kv) {
+                if (body.length() > 0) body.append('&');
+                body.append(URLEncoder.encode(p[0], "UTF-8")).append('=')
+                    .append(URLEncoder.encode(p[1] == null ? "" : p[1], "UTF-8"));
+            }
+            byte[] bytes = body.toString().getBytes("UTF-8");
+
+            HttpURLConnection c = Music.openPublic(baseUrl + "/_admin/api", cookie, timeoutMs);
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8");
+            c.setFixedLengthStreamingMode(bytes.length);
+            OutputStream os = c.getOutputStream();
+            os.write(bytes);
+            os.flush();
+            os.close();
+
+            int code = c.getResponseCode();
+            if (code != 200) {
+                out.error = "HTTP " + code;
+                return out;
+            }
+            Map<String, Object> m = Music.Json.parseObject(
+                    Music.readAllPublic(c.getInputStream(), 256 * 1024));
+            if (m == null) {
+                out.error = "bad json";
+                return out;
+            }
+            out.ok = bool(m.get("ok"));
+            out.error = str(m.get("error"));
+            out.msg = str(m.get("msg"));
+            if (!out.ok && out.error.isEmpty()) out.error = "操作失败";
+            return out;
+        } catch (Throwable t) {
+            out.error = String.valueOf(t);
+            return out;
+        }
     }
 
     private static Saved post(String baseUrl, String cookie, String action,

@@ -30,48 +30,151 @@ import android.widget.TextView
  */
 object Palette {
 
+    const val MODE_NIGHT = "night"
+    const val MODE_DAY = "day"
+
+    /**
+     * 当前配色模式：`night` / `day`。
+     *
+     * 为什么改用「可重涂的变量」而不是常量：
+     *   用户要求 App 的日夜跟随同一台设备的网页端。主题是运行时才知道的
+     *   （要从服务端 `/_theme` 问），而 `const val` 在编译期就固定成深色。
+     *   改成 `get()` 之后，取值变成「读当前模式再选表」——
+     *   全工程 137 处 `Palette.XXX` 的写法一行都不用改。
+     *
+     * 代价：颜色不能再出现在 `when` 的分支常量位置或注解参数里（本项目没有这种用法）。
+     */
+    @Volatile
+    @JvmStatic
+    var mode: String = MODE_NIGHT
+        private set
+
+    /** 一套色值。字段名与旧常量一一对应，方便对照改。 */
+    class Skin(
+        val BG: Int, val CARD: Int, val LINE: Int, val BTN: Int,
+        val TAB_IDLE: Int, val FIELD: Int,
+        val FG: Int, val FG2: Int, val DIM: Int, val DIM2: Int, val FAINT: Int,
+        val ACCENT: Int, val ACCENT_HI: Int, val ACCENT_SOFT: Int,
+        val WARN: Int, val WARN_HI: Int, val OK: Int,
+        /** 选中页签的衬底，带透明度 */
+        val ACCENT_WASH: Int
+    )
+
+    /**
+     * 夜间：与网页端深色主题同值（`#0e1116` 底 / `#171b22` 卡 / `#232a34` 线 /
+     * `#2f80ed` 主色）。客户端原来那套就是它，只是底略亮一点（`#0F141A`），
+     * 因为手机上纯 `#0e1116` 和 AMOLED 黑贴在一起分不清边界。
+     */
+    private val NIGHT = Skin(
+        BG = 0xFF0F141A.toInt(),
+        CARD = 0xFF161B22.toInt(),
+        LINE = 0xFF232A34.toInt(),
+        BTN = 0xFF1B222C.toInt(),
+        TAB_IDLE = 0xFF141A21.toInt(),
+        FIELD = 0xFF11161D.toInt(),
+        FG = 0xFFE6E9EF.toInt(),
+        FG2 = 0xFFD8DEE6.toInt(),
+        DIM = 0xFF9AA4B2.toInt(),
+        DIM2 = 0xFF7D8590.toInt(),
+        FAINT = 0xFF5C6470.toInt(),
+        ACCENT = 0xFF2F6FED.toInt(),
+        ACCENT_HI = 0xFF5AA9FF.toInt(),
+        ACCENT_SOFT = 0xFF8AB4F8.toInt(),
+        WARN = 0xFFC0392B.toInt(),
+        WARN_HI = 0xFFFF8A94.toInt(),
+        OK = 0xFF22A45D.toInt(),
+        ACCENT_WASH = 0x1F2F80ED
+    )
+
+    /**
+     * 日间：与网页端浅色主题对齐（`LIGHT_CSS` 里的 `#f2f4f7` 底 / `#ffffff` 卡 /
+     * `#e3e7ec` 线 / `#1b1f26` 主字 / `#57606a` 次字 / `#2f80ed` 主色）。
+     *
+     * 两处刻意的偏离：
+     *   - 卡片用纯白，而底用 `#f2f4f7`：手机上纯白底 + 纯白卡会失去层次，
+     *     网页端也是这么配的。
+     *   - 主色不动（`#2f80ed`）：品牌色日夜不该变，变的只有底和字。
+     */
+    private val DAY = Skin(
+        BG = 0xFFF2F4F7.toInt(),
+        CARD = 0xFFFFFFFF.toInt(),
+        LINE = 0xFFE3E7EC.toInt(),
+        BTN = 0xFFEDF0F4.toInt(),
+        TAB_IDLE = 0xFFE9EDF2.toInt(),
+        FIELD = 0xFFFAFBFC.toInt(),
+        FG = 0xFF1B1F26.toInt(),
+        FG2 = 0xFF2C323B.toInt(),
+        DIM = 0xFF57606A.toInt(),
+        DIM2 = 0xFF6B7480.toInt(),
+        FAINT = 0xFF98A1AC.toInt(),
+        ACCENT = 0xFF2F80ED.toInt(),
+        ACCENT_HI = 0xFF1657B8.toInt(),   // 浅底上 `#5aa9ff` 太淡，压深一档才够对比
+        ACCENT_SOFT = 0xFF2463B8.toInt(),
+        WARN = 0xFFC0392B.toInt(),
+        WARN_HI = 0xFFB3261E.toInt(),     // 浅底不能用 `#ff8a94`
+        OK = 0xFF1C7A48.toInt(),
+        ACCENT_WASH = 0x1A2F80ED
+    )
+
+    private val skin: Skin get() = if (mode == MODE_DAY) DAY else NIGHT
+
+    /** 切换配色。调用方负责重建界面（颜色是取值时算的，不会自己刷到已建好的 View 上）。 */
+    @JvmStatic
+    fun setMode(m: String) {
+        mode = if (m == MODE_DAY) MODE_DAY else MODE_NIGHT
+    }
+
+    @JvmStatic
+    fun isDay(): Boolean = mode == MODE_DAY
+
+    /** 由服务端主题（dark/light/ink）映射到客户端两态：只有 light 算日间。 */
+    @JvmStatic
+    fun setFromServerTheme(theme: String?) {
+        setMode(if ("light" == theme) MODE_DAY else MODE_NIGHT)
+    }
+
     // ---- 底 ----
     /** 页面底色。所有页面（含寻找 NAS）的 root 都是它。 */
-    const val BG = 0xFF0F141A.toInt()
+    val BG: Int get() = skin.BG
     /** 卡片 / 列表块 / 输入框。 */
-    const val CARD = 0xFF161B22.toInt()
+    val CARD: Int get() = skin.CARD
     /** 卡片描边、分割线、目录树行分隔。 */
-    const val LINE = 0xFF232A34.toInt()
+    val LINE: Int get() = skin.LINE
     /** 按钮静默底（比卡片再深一点，压在卡片上时不糊）。 */
-    const val BTN = 0xFF1B222C.toInt()
+    val BTN: Int get() = skin.BTN
     /** 页签 / 分段控件的未选中底。 */
-    const val TAB_IDLE = 0xFF141A21.toInt()
+    val TAB_IDLE: Int get() = skin.TAB_IDLE
     /** 输入框底（比卡片略深，才能和卡片区分）。 */
-    const val FIELD = 0xFF11161D.toInt()
+    val FIELD: Int get() = skin.FIELD
 
     // ---- 字 ----
     /** 主文字（标题、正文）。 */
-    const val FG = 0xFFE6E9EF.toInt()
+    val FG: Int get() = skin.FG
     /** 次文字（列表标题、按钮字）。 */
-    const val FG2 = 0xFFD8DEE6.toInt()
+    val FG2: Int get() = skin.FG2
     /** 弱文字（计数、按钮说明）。 */
-    const val DIM = 0xFF9AA4B2.toInt()
+    val DIM: Int get() = skin.DIM
     /** 更弱（提示行）。 */
-    const val DIM2 = 0xFF7D8590.toInt()
+    val DIM2: Int get() = skin.DIM2
     /** 最弱（占位、hint）。 */
-    const val FAINT = 0xFF5C6470.toInt()
+    val FAINT: Int get() = skin.FAINT
 
     // ---- 主色与状态 ----
     /** 主题蓝，与网页 #2f80ed、桌面 Theme.ACCENT 同值。 */
-    const val ACCENT = 0xFF2F6FED.toInt()
+    val ACCENT: Int get() = skin.ACCENT
     /** 主色的亮版，链接与选中页签文字。 */
-    const val ACCENT_HI = 0xFF5AA9FF.toInt()
+    val ACCENT_HI: Int get() = skin.ACCENT_HI
     /** 主色的淡版，顶栏文字按钮。 */
-    const val ACCENT_SOFT = 0xFF8AB4F8.toInt()
+    val ACCENT_SOFT: Int get() = skin.ACCENT_SOFT
     /** 危险（失败、删除）。 */
-    const val WARN = 0xFFC0392B.toInt()
+    val WARN: Int get() = skin.WARN
     /** 危险文字的浅色版（深底上可读）。 */
-    const val WARN_HI = 0xFFFF8A94.toInt()
+    val WARN_HI: Int get() = skin.WARN_HI
     /** 成功 / 已连接。 */
-    const val OK = 0xFF22A45D.toInt()
+    val OK: Int get() = skin.OK
 
     /** 主色的 12% 透明底，选中页签的衬底。 */
-    val ACCENT_WASH: Int get() = Color.argb(0x1F, 0x2F, 0x80, 0xED)
+    val ACCENT_WASH: Int get() = skin.ACCENT_WASH
 
     // ------------------------------------------------------------ 工厂
 

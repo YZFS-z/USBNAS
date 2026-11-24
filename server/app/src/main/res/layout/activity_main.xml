@@ -358,15 +358,16 @@
     </LinearLayout>
 
     <!--
-      底部翻页指示条。
+      底部翻页条。
       window.setDecorFitsSystemWindows(false) 之后 DecorView 铺满 1080x2400，
       但内容真正能画的区间是 mAppBounds（底部被导航栏手势区占掉 44dp），
       这一条必须自己让开导航栏高度，否则整条落在窗口外、点不到。
+      高度与横屏对齐到 26dp、页签 20dp：比原来的 18dp 仍然宽裕，但不再吃掉首页一整行。
     -->
     <LinearLayout
         android:id="@+id/pageBar"
         android:layout_width="match_parent"
-        android:layout_height="18dp"
+        android:layout_height="26dp"
         android:background="@android:color/transparent"
         android:gravity="center"
         android:orientation="horizontal">
@@ -374,28 +375,28 @@
         <TextView
             android:id="@+id/dot0"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="20dp"
             android:background="@drawable/bg_pill"
-            android:paddingStart="10dp"
-            android:paddingTop="0dp"
-            android:paddingEnd="10dp"
-            android:paddingBottom="0dp"
+            android:gravity="center"
+            android:minWidth="84dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:text="概览"
             android:textColor="@color/accent"
-            android:textSize="10sp" />
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/dot1"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:paddingStart="10dp"
-            android:paddingTop="0dp"
-            android:paddingEnd="10dp"
-            android:paddingBottom="0dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="12dp"
+            android:gravity="center"
+            android:minWidth="84dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:text="控制"
             android:textColor="@color/textMute"
-            android:textSize="10sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 
 </LinearLayout>

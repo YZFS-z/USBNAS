@@ -60,6 +60,8 @@ public final class Main {
     private final JButton loginBtn = Theme.ghost("登录…");
     /** 顶栏右侧的更新入口：图标用文字代替，省得再带一套位图资源 */
     private final JButton updBtn = Theme.ghost("⟳ 更新");
+    /** 日夜切换。文案语义照抄网页端 themeButton：「点它能切到什么」 */
+    private final JButton themeBtn = Theme.ghost(Theme.isDay() ? "☾ 夜间" : "☀ 日间");
     private final JTextField portField = Theme.field(5);
     private final JCheckBox looseBox = Theme.check("显示未确认的开放端口", false);
     private final JEditorPane preview = new JEditorPane();
@@ -97,6 +99,7 @@ public final class Main {
 
     Main() {
         store = new Store(new File(appDir(), "known.txt"));
+        frameRef = this;
         buildUi();
         seedFromHistory();
         SwingUtilities.invokeLater(this::startScan);
@@ -153,6 +156,7 @@ public final class Main {
 
         JPanel brandRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         brandRight.setOpaque(false);
+        brandRight.add(themeBtn);
         brandRight.add(scanBtn);
         brandRight.add(updBtn);
         brandRight.add(portField);
@@ -361,6 +365,7 @@ public final class Main {
         scanBtn.addActionListener(e -> startScan());
         openBtn.addActionListener(e -> openInBrowser(selected()));
         loginBtn.addActionListener(e -> doLogin(selected()));
+        themeBtn.addActionListener(e -> toggleTheme());
 
         portField.setText(String.valueOf(DEFAULT_PORT));
         portField.setPreferredSize(new Dimension(70, 32));
@@ -368,8 +373,69 @@ public final class Main {
         showPlaceholder();
     }
 
-    private void showPlaceholder() {
-        preview.setText("<html><body style='font-family:" + Theme.FONT_STACK + ";"
+    /**
+     * 切日夜：刷调色板 → 重装 UIManager → 尽量就地重涂 → 存本地 → 重建窗口。
+     *
+     * <p>为什么要重建窗口而不是 {@code updateComponentTreeUI(frame)}：界面是手搭的，
+     * 大量组件在构造时就 `setBackground(当时的 Theme.BG_XXX)` 把颜色拷走了，
+     * 遍历改色等于把 buildUi 抄一遍。重建一次主窗口（保留选择、连接、日志）
+     * 是这里最不容易出错的做法 —— 网页端 `recreate()` 也是同一个取舍。
+     *
+     * <p>主题**不上报服务端**：桌面端只是为了自己看得舒服，不该因为你在这台电脑上
+     * 点了夜间就把手机和网页一起改掉。真源仍然是服务端 {@code /_theme}，
+     * 桌面端只跟随本地偏好。
+     */
+    private void toggleTheme() {
+        boolean next = !Theme.isDay();
+        Theme.setDay(next);
+        ThemePrefs.setDay(next);
+        themeBtn.setText(next ? "☾ 夜间" : "☀ 日间");
+
+        // 先就地重涂一遍：即使重建有意外，窗口也不会留一半旧色
+        Theme.applyTo(frame.getContentPane());
+
+        Svc keep = selected();
+        boolean vis = frame.isVisible();
+        int x = frame.getX();
+        int y = frame.getY();
+        int w = frame.getWidth();
+        int h = frame.getHeight();
+        int tabIdx = tabs == null ? 0 : tabs.getSelectedIndex();
+
+        // 播放器/阅读器等子窗口挂在旧实例上，重建前必须关掉，否则会留下
+        // 一堆还活着的窗口，点它们的按钮会调到已经 dispose 的主窗口。
+        for (java.awt.Window win : java.awt.Window.getWindows()) {
+            if (!(win instanceof java.awt.Dialog)) continue;
+            win.dispose();
+        }
+        if (player != null) player.dispose();
+        if (videoWindow != null) videoWindow.dispose();
+
+        Main fresh = new Main();
+        fresh.frame.setBounds(x, y, w, h);
+        if (keep != null) {
+            for (int i = 0; i < fresh.model.size(); i++) {
+                if (fresh.model.get(i).info.baseUrl.equals(keep.info.baseUrl)) {
+                    fresh.list.setSelectedIndex(i);
+                    break;
+                }
+            }
+        }
+        if (fresh.tabs != null && tabIdx >= 0 && tabIdx < fresh.tabs.getTabCount()) {
+            fresh.tabs.setSelectedIndex(tabIdx);
+        }
+        if (connBase != null && !connBase.isEmpty()) fresh.connectMedia(connBase);
+        if (connSid != null) fresh.connSid = connSid;
+        fresh.frame.setVisible(vis);
+
+        frame.dispose();
+        frameRef = fresh;
+    }
+
+    /** 重建后主窗口换了实例，静态引用指向新的那个（主题再点还得找得到） */
+    private static volatile Main frameRef;
+
+    private void showPlaceholder() {        preview.setText("<html><body style='font-family:" + Theme.FONT_STACK + ";"
                 + "background:" + Theme.hex(Theme.BG_DEEP) + ";color:" + Theme.hex(Theme.FG_SUB) + ";padding:28px'>"
                 + "<h2 style='color:" + Theme.hex(Theme.FG_TITLE) + ";margin:0 0 8px'>USBNASLink</h2>"
                 + "<p style='color:" + Theme.hex(Theme.FG_SUB) + "'>选择左侧扫描到的服务器，双击或用下方按钮在浏览器中打开。</p>"
@@ -660,28 +726,29 @@ public final class Main {
         JTextField u = Theme.field(16);
         u.setText(System.getProperty("user.name", ""));
         JPasswordField pw = Theme.password(16);
+        JCheckBox remember = Theme.check("记住该设备（服务端会话保留一年）", false);
         p.add(Theme.label("用户名"));
         p.add(u);
         p.add(Theme.label("密码"));
         p.add(pw);
+        p.add(remember);
         p.add(Theme.caption("登录后点「在浏览器打开」会用一张一次性票自动登录浏览器。"));
-        int r = JOptionPane.showConfirmDialog(frame, p, "登录 " + s.info.hostPort(),
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
+        if (!Theme.confirm(frame, "登录 " + s.info.hostPort(), null, p, "登录", "取消", false)) return;
 
         loginBtn.setEnabled(false);
         setStatus("正在登录…");
         final String user = u.getText().trim();
         final String pass = new String(pw.getPassword());
+        final boolean keep = remember.isSelected();
         Thread t = new Thread(() -> {
             Session sess = new Session(s.info.baseUrl);
-            String err = sess.login(user, pass);
+            String err = sess.login(user, pass, keep);
             SwingUtilities.invokeLater(() -> {
                 loginBtn.setEnabled(true);
                 if (err == null) {
                     s.info.needLogin = false;
                     s.info.user = user;
-                    setStatus("登录成功：" + user + "（浏览器免登录链接已就绪）");
+                    setStatus("登录成功：" + user + (keep ? "（已记住该设备）" : "") + "（浏览器免登录链接已就绪）");
                     appendLog("登录成功 " + s.info.baseUrl + " as " + user
                             + " sid=" + (sess.sid().length() > 8 ? sess.sid().substring(0, 8) + "…" : sess.sid()));
                     previewSvc = s;
@@ -802,6 +869,7 @@ public final class Main {
         }
         // 必须在 setLookAndFeel 之后：Theme.install() 灌的是 UIDefaults 覆盖值，
         // 反过来会被系统 LAF 再覆盖掉，界面就退回 Windows 灰。
+        Theme.applyPalette(ThemePrefs.isDay());
         Theme.install();
         SwingUtilities.invokeLater(() -> {
             Main m = new Main();

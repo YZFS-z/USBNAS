@@ -145,8 +145,25 @@ class BrowseActivity : AppCompatActivity() {
         // 首屏地址：手上已经有 sid 就向服务端要一张一次性交接票，
         // 让 WebView 里的 Cookie 是服务端亲手种下的（走到 /_login/sso 后 303 跳回来），
         // 而不是只靠 setCookie 猜。拿不到票就退回普通地址，顶多让用户登一次。
-        val startUrl = handoffUrl() ?: baseUrl
+        //
+        // 两种地址都带上 `?theme=`：WebView 里跑的就是服务端那套页面，它自己的
+        // localStorage 是空的，不带主题就会以服务端的 dark 起手 —— 如果 App 此时
+        // 是日间，用户一进「网页」页签就会看到一块黑色的页面，像另一个 App。
+        val startUrl = handoffUrl() ?: themeUrl(baseUrl)
         web.loadUrl(startUrl)
+    }
+
+    /**
+     * 给站内地址补上当前主题参数。
+     *
+     * 服务端请求入口会把 `?theme=` 记成全局配色（并落盘到 AppPrefs），
+     * 所以这一次跳转既给 WebView 定了色，也顺手确认了三端一致。
+     */
+    private fun themeUrl(url: String): String {
+        val m = Palette.mode
+        val t = if (m == Palette.MODE_DAY) ThemeLib.LIGHT else ThemeLib.DARK
+        return if (url.contains("theme=")) url
+        else url + (if (url.contains('?')) "&theme=" else "?theme=") + t
     }
 
     /**
@@ -160,11 +177,20 @@ class BrowseActivity : AppCompatActivity() {
             val sess = Session(baseUrl)
             sess.setSid(sid)
             val t = sess.handoff()
-            if (t.isNullOrEmpty()) null else "$baseUrl/_login/sso?t=$t&back=%2F"
+            // back 里同样带上主题：交接票换完 sid 之后是 303 跳到 back，
+            // 不带就是跳到一个没有主题参数的首页（服务端会用 global 配色，
+            // 而那份配色可能刚好是别的客户端改的）。
+            if (t.isNullOrEmpty()) null
+            else "$baseUrl/_login/sso?t=$t&back=" + java.net.URLEncoder.encode(
+                    "/" + themeQuery(), "UTF-8")
         } catch (e: Throwable) {
             null
         }
     }
+
+    /** `?theme=day` 对应的服务端参数值（只有服务端认识的 light/dark 两种入口）。 */
+    private fun themeQuery(): String =
+            "?theme=" + if (Palette.mode == Palette.MODE_DAY) ThemeLib.LIGHT else ThemeLib.DARK
 
     private fun fail(msg: String) {
         loading.visibility = View.GONE

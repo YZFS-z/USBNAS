@@ -64,11 +64,24 @@ public final class Session {
      * @return null 表示成功；否则是人类可读的失败原因
      */
     public String login(String u, String p) {
+        return login(u, p, false);
+    }
+
+    /**
+     * 表单登录，可要求「记住该设备」。
+     *
+     * @param remember true 时表单带上 remember=1，服务端把 Cookie 的 Max-Age
+     *                 从一天放成一年。注意这只是「少敲一次密码」——
+     *                 服务端会话仍是内存态，服务端一重启照样要重新登录。
+     * @return null 表示成功；否则是人类可读的失败原因
+     */
+    public String login(String u, String p, boolean remember) {
         if (u == null || u.isEmpty()) return "用户名不能为空";
         Map<String, String> form = new LinkedHashMap<>();
         form.put("u", u);
         form.put("p", p == null ? "" : p);
         form.put("back", "/");
+        if (remember) form.put("remember", "1");
 
         HttpURLConnection c = null;
         try {

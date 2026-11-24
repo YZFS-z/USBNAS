@@ -97,6 +97,9 @@ class LibraryActivity : AppCompatActivity() {
 
     private var currentTab = 0
 
+    /** 顶栏那颗「日间/夜间」按钮。重建后文案要跟着新的 [Palette.mode] 走。 */
+    private var themeBtn: Button? = null
+
     /**
      * 「网页」在页签行里的下标。
      *
@@ -116,6 +119,9 @@ class LibraryActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 先把配色定下来再建界面：Palette 的取值是「当时」算的，界面建完再改
+        // 只会影响之后新建的控件，已画的那些不会自己变色。
+        ThemeCtl.prime(this)
         prefs = Prefs(this)
         baseUrl = intent.getStringExtra(EXTRA_URL) ?: run {
             finish(); return
@@ -147,10 +153,19 @@ class LibraryActivity : AppCompatActivity() {
         })
         top.addView(titleBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        // 顶栏不再放按钮：原来这里有一个「网页」按钮，字号、底色、高度都和下面
-        // 一排页签不同，看上去像从别的 App 里剪过来贴上去的。
-        // 现在它变成第五个页签「网页」，和「影视 · 音乐 · 图书 · 管理设置」同高同宽
-        // 同字体，选中态也由同一套 Palette.tab/paintTab 画。
+        // 顶栏只留一个「日间/夜间」小按钮。
+        //
+        // 文案是「点它能切到什么」，与网页端 themeButton 一致 —— 页面右上角那颗
+        // 按钮上写「日间」，意思就是「现在是夜里，点一下变白天」。
+        //
+        // 切换后调 ThemeCtl.toggle：它先本地重涂再重建界面（颜色是取值时算的，
+        // 已建好的 View 不会自己变），同时把新值 POST 给服务端 `/_theme`，
+        // 让同一台设备的网页端下次打开也是这个色。
+        themeBtn = Palette.ghost(this, ThemeCtl.label()).apply {
+            setOnClickListener { ThemeCtl.toggle(this@LibraryActivity, baseUrl, sid) { msg(it) } }
+        }
+        top.addView(themeBtn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { rightMargin = dp(4) })
         root.addView(top)
 
         // --- 页签 ---
@@ -1357,10 +1372,22 @@ class LibraryActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 只在「管理设置」页签可见时才刷新：其它页签刷新没必要，还会多打一次请求
+        // 只在「管理设置」页签可见时才刷新：其它页签刷新没必要，还会多打一次请求。
+        // 注意这里要先从 Prefs 里把 sid 读回来 —— 用户在网页端登录成功后，
+        // BrowseActivity.onPageFinished 会把服务端新发的 sid 写进 Prefs，
+        // 而本 Activity 的 sid 字段还是打开网页之前那个（已失效的）。
+        // 不重读，就会出现「明明刚登录完，回到管理设置仍写着未登录」。
         if (currentTab == TAB_MANAGE && manageHost.childCount > 0) {
+            val fresh = Prefs(this).sid
+            if (!fresh.isNullOrEmpty() && fresh != sid) {
+                sid = fresh
+            }
             loadManage(false)
         }
+        // 配色跟着服务端走：每次回到前台问一次（ThemeCtl 内部有 20 秒节流，
+        // 切页签/开网页回来都不会真的打请求）。问到的和服务端不一致时
+        // ThemeCtl 会回调这里重建界面 —— 只重建、不弹提示，因为这不是用户的操作。
+        ThemeCtl.sync(this, baseUrl, sid) { recreate() }
     }
 
     /** 第四个页签「管理设置」：先建 App 自身设置（同步、不联网），NAS 全局配置异步填 */
@@ -1373,9 +1400,10 @@ class LibraryActivity : AppCompatActivity() {
         // 「App 版本」，这样一眼能看出「我到底登没登进去」—— 原来只有一句
         // 静态说明，登录过期了也照样写着要登录，用户会以为按钮坏了。
         manageHost.addView(blockHeader("1 · 设置服务器端",
-            "站点名称与四个库的目录是全局配置，存在服务端，所有客户端共用；改它需要管理员账号。"))
+            "站点名称、四个库的目录、账号，都是存在服务端的全局配置，所有客户端共用；改它需要管理员账号。"))
         manageHost.addView(serverStatusCard())
         manageHost.addView(nasSettingsCard())
+        manageHost.addView(accountsCard())
         manageHost.addView(blockHeader("2 · 设置客户端",
             "下面这些只影响这台手机上的 App，不上传、不同步、改完立刻生效。"))
         manageHost.addView(ApkUpdater.settingsView(this))
@@ -1447,7 +1475,6 @@ class LibraryActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(dp(72), dp(36)).apply { leftMargin = dp(8) })
         return row
     }
-
     private fun nasSettingsCard(): View {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         adminCard = LinearLayout(this).apply {
@@ -1456,6 +1483,256 @@ class LibraryActivity : AppCompatActivity() {
         }
         box.addView(adminCard)
         return box
+    }
+
+    // ---------------------------------------------------------------- 账号管理
+
+    private var accountsBox: LinearLayout? = null
+
+    /**
+     * 账号管理卡片。
+     *
+     * 为什么放在客户端而不只放网页端：这台机器常年插在底座上当相框，想加个人
+     * 还得先去电脑前开浏览器 —— 而手机就在手里。服务端那三个动作（建号 / 改人 /
+     * 踢线 / 删号）早就有了，客户端补一张脸即可。
+     *
+     * 三条保护（不能删自己、不能把自己降级、不能删掉最后一个管理员）一律由
+     * 服务端判定，这里只把它的原话弹出来 —— 保护逻辑只有一份，改一处就够。
+     */
+    private fun accountsCard(): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(18))
+        }
+        accountsBox = box
+        return box
+    }
+
+    /** 重画账号列表（管理员才画表单，其他人只看到一句「需要管理员」） */
+    private fun fillAccounts(st: Admin.State) {
+        val box = accountsBox ?: return
+        box.removeAllViews()
+        box.addView(TextView(this).apply {
+            text = "账号"
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        box.addView(Palette.note(this,
+            "管理员能给所有人改目录；读写只能浏览和上传；只读只能看和下载。改密码会把这个人已登录的会话全踢下线。"))
+
+        if (!st.admin) {
+            box.addView(Palette.note(this, "需要管理员账号才能管理账号。", Palette.DIM2),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            return
+        }
+
+        val accounts = st.accounts
+        if (accounts.isEmpty()) {
+            box.addView(Palette.note(this,
+                "服务端没返回账号列表（可能是旧版本）。网页端 /_admin 底部仍可管理。", Palette.DIM2),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        } else {
+            for (a in accounts) box.addView(accountRow(a, st))
+        }
+
+        // 建号：昵称 + 密码 + 等级，一行放不下就分两行
+        val adder = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        adder.addView(Palette.note(this, "新建账号", Palette.DIM))
+        val nameIn = Palette.field(this, "账号（字母数字）")
+        val pwIn = Palette.field(this, "密码")
+        val levelSp = android.widget.Spinner(this).apply {
+            background = Palette.round(this@LibraryActivity, Palette.FIELD, 8f, Palette.LINE, 1f)
+            adapter = android.widget.ArrayAdapter(this@LibraryActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("只读 · 浏览下载", "读写 · 浏览播放上传", "管理员 · 全部权限"))
+            setSelection(1)
+        }
+        adder.addView(nameIn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) })
+        adder.addView(pwIn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) })
+        adder.addView(levelSp, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) })
+        adder.addView(Palette.solid(this, "创建账号").apply {
+            setOnClickListener {
+                val n = nameIn.text.toString().trim()
+                val p = pwIn.text.toString()
+                if (n.isEmpty() || p.isEmpty()) {
+                    toast("账号和密码都要填")
+                    return@setOnClickListener
+                }
+                // 下拉项与等级值同向：0 只读 / 1 读写 / 2 管理员
+                val lv = levelSp.selectedItemPosition.coerceIn(0, 2)
+                accountOp("建号", n, p, lv) {
+                    nameIn.setText("")
+                    pwIn.setText("")
+                }
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+            .apply { topMargin = dp(8) })
+        box.addView(adder)
+    }
+
+    /** 一个账号一行：昵称 + 等级 + 在线数 + 三个按钮 */
+    private fun accountRow(a: Admin.Account, st: Admin.State): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = Palette.round(this@LibraryActivity, Palette.FIELD, 10f, Palette.LINE, 1f)
+        }
+        val params = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { topMargin = dp(8) }
+        box.layoutParams = params
+
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        top.addView(TextView(this).apply {
+            text = a.name
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (a.me) top.addView(Palette.note(this, "当前", Palette.ACCENT_SOFT))
+        box.addView(top)
+
+        val state = buildString {
+            append(a.levelName.ifEmpty { "未知等级" })
+            if (a.scoped) append(" · 限定目录")
+            append(if (a.online > 0) " · 在线 ${a.online} 台" else " · 未在线")
+            if (a.me) append(" · 就是你自己")
+        }
+        box.addView(Palette.note(this, state,
+            if (a.online > 0) Palette.OK else Palette.DIM2))
+
+        val acts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        acts.addView(Palette.outline(this, "改等级").apply {
+            setOnClickListener { pickLevel(a) }
+        }, LinearLayout.LayoutParams(0, dp(38), 1f))
+        acts.addView(Palette.outline(this, "改密码").apply {
+            setOnClickListener { askPassword(a) }
+        }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
+        if (a.online > 0 && !a.me) {
+            acts.addView(Palette.outline(this, "踢下线").apply {
+                setOnClickListener { confirmKick(a) }
+            }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
+        }
+        if (!a.me) {
+            acts.addView(Palette.outline(this, "删除").apply {
+                setTextColor(Palette.WARN_HI)
+                setOnClickListener { confirmDelete(a) }
+            }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
+        }
+        box.addView(acts, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { topMargin = dp(8) })
+        return box
+    }
+
+    private fun pickLevel(a: Admin.Account) {
+        // 列表顺序与等级值同向：0 只读 / 1 读写 / 2 管理员。
+        // 之前这里写成 lv = 2 - which，而 setSingleChoiceItems 的预选位置传的又是 cur，
+        // 两边方向相反 —— 点第一项「只读」实际把人变成了管理员。
+        val opts = arrayOf("只读 · 浏览下载", "读写 · 浏览播放上传", "管理员 · 全部权限")
+        val cur = a.level.coerceIn(0, 2)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("「${a.name}」的等级")
+            .setSingleChoiceItems(opts, cur) { d, which ->
+                d.dismiss()
+                if (which == a.level) return@setSingleChoiceItems
+                accountOp("改等级", a.name, "", which)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun askPassword(a: Admin.Account) {
+        val input = Palette.field(this, "新密码").apply { setInputType(
+            android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) }
+        // 用 setView(view, l, t, r, b) 的五参重载在 Kotlin 里解析不到
+        // （Builder 只有 setView(View) 和 setView(Int)），自己套一层带内边距的 FrameLayout
+        val holder = android.widget.FrameLayout(this).apply {
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(input, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("给「${a.name}」改密码")
+            .setMessage("改完这个账号已登录的地方会全部掉线，要用新密码重新登。")
+            .setView(holder)
+            .setPositiveButton("改") { _, _ ->
+                val p = input.text.toString()
+                if (p.isEmpty()) {
+                    toast("密码不能为空")
+                } else {
+                    accountOp("改密码", a.name, p, a.level)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmKick(a: Admin.Account) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("让「${a.name}」下线？")
+            .setMessage("账号还在，但已经登录的 ${a.online} 个会话会立刻失效，下次请求要重新登录。")
+            .setPositiveButton("踢下线") { _, _ -> accountOp("踢下线", a.name, "", a.level) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmDelete(a: Admin.Account) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("删除账号「${a.name}」？")
+            .setMessage("这个操作不能撤销；他上传过的文件不会跟着删。")
+            .setPositiveButton("删除") { _, _ -> accountOp("删除", a.name, "", a.level) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 四个账号动作统一走这里：后台请求 → toast → 重新拉一遍清单 */
+    private fun accountOp(label: String, name: String, pw: String, level: Int, onOk: () -> Unit = {}) {
+        if (adminState?.admin != true) {
+            toast("当前会话不是管理员")
+            return
+        }
+        val base = baseUrl
+        val ck = sid
+        adminIo.execute {
+            val r = try {
+                when (label) {
+                    "建号" -> Admin.addAccount(base, ck, name, pw, level, 9000)
+                    "改密码" -> Admin.setAccount(base, ck, name, pw, level, 9000)
+                    "改等级" -> Admin.setAccount(base, ck, name, "", level, 9000)
+                    "踢下线" -> Admin.kickAccount(base, ck, name, 9000)
+                    else -> Admin.removeAccount(base, ck, name, 9000)
+                }
+            } catch (t: Throwable) {
+                Admin.Saved().apply { ok = false; error = "${t.message}" }
+            }
+            ui.post {
+                if (r.ok) {
+                    toast(r.msg?.ifEmpty { "$label 成功" } ?: "$label 成功")
+                    onOk()
+                    loadManage()
+                } else {
+                    toast("$label 没成功：${r.error ?: "未知错误"}")
+                }
+            }
+        }
+    }
+
+    /** 短提示：同时打到 logcat，MIUI 的 Toast 在 uiautomator / dumpsys 里都抓不到 */
+    private fun toast(s: String) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+        android.util.Log.i("USBNASLink", "toast: $s")
     }
 
     /** 带用户反馈的刷新：转一下转圈提示，成功后 toast 报身份 */
@@ -1481,6 +1758,7 @@ class LibraryActivity : AppCompatActivity() {
                 adminState = st
                 fillServerStatus(st)
                 fillManage(st)
+                fillAccounts(st)
                 if (showToast) {
                     Toast.makeText(
                         this@LibraryActivity,
@@ -1543,35 +1821,23 @@ class LibraryActivity : AppCompatActivity() {
                 "当前账号「${st.who}」是${st.levelName}，改设置需要管理员。"
             else
                 "还没登录，或者登录已过期；改设置需要管理员账号。", Palette.DIM))
-            // 两个按钮并排：去网页登录 + 刷新。只给「去网页端登录」时，用户在网页端
-            // 登完回来页面上仍旧写着要登录（sid 只在自己进程里缓存），会以为没登上。
+            // 只留一个按钮：刷新交给上面状态行右边那颗，这里再放一颗就成了
+            // 「刷新」和「刷新会话」两个说法做同一件事，用户第一反应是「哪个算数」。
             val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             btns.addView(Palette.solid(this, if (st.logged) "换管理员账号" else "去网页端登录").apply {
                 setOnClickListener {
                     openWebForLogin()
                 }
-            }, LinearLayout.LayoutParams(0, dp(46), 1.6f))
-            btns.addView(Palette.outline(this, "刷新会话").apply {
-                setOnClickListener { refreshManage(true) }
-            }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
             card.addView(btns, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(10) })
             // 非管理员也要能看见当前配置是什么（只读体面地显示出来）
             if (!st.logged) return
         } else {
-            val bar = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            bar.addView(Palette.note(this, "管理员：${st.who}（${st.levelName}）", Palette.OK),
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            bar.addView(Palette.outline(this, "刷新").apply {
-                setOnClickListener { refreshManage(true) }
-            }, LinearLayout.LayoutParams(dp(72), dp(36)))
-            card.addView(bar, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(6) })
+            card.addView(Palette.note(this, "管理员：${st.who}（${st.levelName}）", Palette.OK),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         }
 
         val editable = st.admin

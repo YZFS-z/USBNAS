@@ -5,6 +5,7 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -14,10 +15,14 @@ import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.border.Border;
 import javax.swing.plaf.ColorUIResource;
+import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.FlowLayout;
 import java.awt.Font;
 
 /**
@@ -56,29 +61,113 @@ final class Theme {
 
     // ---------------------------------------------------------------- 调色板
 
-    static final Color BG_DEEP = new Color(0x0e, 0x11, 0x16);
-    static final Color BG_CARD = new Color(0x17, 0x1b, 0x22);
-    static final Color BG_HOVER = new Color(0x1b, 0x22, 0x2c);
-    static final Color BG_SEL = new Color(0x1d, 0x2c, 0x3d);
-    static final Color LINE = new Color(0x23, 0x2a, 0x34);
-    static final Color LINE_SOFT = new Color(0x2a, 0x32, 0x3d);
+    /**
+     * 当前是不是日间。**唯一开关**，改它就等于改整套色板。
+     *
+     * <p>为什么不直接换 LookAndFeel 或做两套 Jar：界面全是手搭的 Swing 组件，
+     * 换 LAF 只能改到原生控件那一半，另一半（自绘按钮、卡片、行背景）会留在旧色上。
+     * 这里的做法是「同名静态字段 + setDay() 重新赋值」，因为所有调用点都写成
+     * {@code Theme.BG_CARD}，取的是**当前**字段值 —— 所以调用点一行都不用改。
+     *
+     * <p>注意取值时机：Swing 组件在 {@code new} 的那一刻就把颜色拷走了，
+     * 所以切主题之后必须重建窗口（{@link #applyTo} 只负责列表/文本区这类
+     * 「颜色留在渲染器里」的控件）。这正是网页端 {@code recreate()} 的同一思路。
+     */
+    private static volatile boolean day = false;
 
-    static final Color FG_TITLE = new Color(0xe6, 0xe9, 0xef);
-    static final Color FG_TEXT = new Color(0xe6, 0xe9, 0xef);
-    static final Color FG_SUB = new Color(0x9a, 0xa4, 0xb2);
-    static final Color FG_DIM = new Color(0x7d, 0x85, 0x90);
-    static final Color FG_MUTE = new Color(0x6b, 0x74, 0x80);
+    static boolean isDay() {
+        return day;
+    }
 
-    static final Color BRAND = new Color(0x2f, 0x80, 0xed);
-    static final Color BRAND_DIM = new Color(0x24, 0x63, 0xb8);
-    static final Color BRAND_LINK = new Color(0x5a, 0xa9, 0xff);
-    static final Color LINK_SOFT = new Color(0x8e, 0xc5, 0xff);
+    // 网页端三套主题的色值：dark / light / ink。桌面只做 dark 和 light 两套，
+    // ink（水墨屏）是手机专用的低对比灰阶，桌面屏幕上看不出效果，不做。
+    static Color BG_DEEP;
+    static Color BG_CARD;
+    static Color BG_HOVER;
+    static Color BG_SEL;
+    static Color LINE;
+    static Color LINE_SOFT;
 
-    static final Color OK = new Color(0x8f, 0xe0, 0xac);
-    static final Color OK_BG = new Color(0x12, 0x30, 0x1f);
-    static final Color OK_LINE = new Color(0x1f, 0x52, 0x36);
-    static final Color ERR = new Color(0xff, 0x8a, 0x94);
-    static final Color WARN = new Color(0xff, 0xc9, 0x6b);
+    static Color FG_TITLE;
+    static Color FG_TEXT;
+    static Color FG_SUB;
+    static Color FG_DIM;
+    static Color FG_MUTE;
+
+    static Color BRAND;
+    static Color BRAND_DIM;
+    static Color BRAND_LINK;
+    static Color LINK_SOFT;
+
+    static Color OK;
+    static Color OK_BG;
+    static Color OK_LINE;
+    static Color ERR;
+    static Color WARN;
+
+    static {
+        applyPalette(false);
+    }
+
+    /**
+     * 把调色板刷成指定模式。只改静态字段，不碰任何已存在的组件 ——
+     * 调用方负责重建界面，并重新 {@link #install()} 一次让 UIManager 跟上。
+     */
+    static void applyPalette(boolean dayMode) {
+        day = dayMode;
+        if (!dayMode) {
+            BG_DEEP = new Color(0x0e, 0x11, 0x16);
+            BG_CARD = new Color(0x17, 0x1b, 0x22);
+            BG_HOVER = new Color(0x1b, 0x22, 0x2c);
+            BG_SEL = new Color(0x1d, 0x2c, 0x3d);
+            LINE = new Color(0x23, 0x2a, 0x34);
+            LINE_SOFT = new Color(0x2a, 0x32, 0x3d);
+
+            FG_TITLE = new Color(0xe6, 0xe9, 0xef);
+            FG_TEXT = new Color(0xe6, 0xe9, 0xef);
+            FG_SUB = new Color(0x9a, 0xa4, 0xb2);
+            FG_DIM = new Color(0x7d, 0x85, 0x90);
+            FG_MUTE = new Color(0x6b, 0x74, 0x80);
+
+            BRAND = new Color(0x2f, 0x80, 0xed);
+            BRAND_DIM = new Color(0x24, 0x63, 0xb8);
+            BRAND_LINK = new Color(0x5a, 0xa9, 0xff);
+            LINK_SOFT = new Color(0x8e, 0xc5, 0xff);
+
+            OK = new Color(0x8f, 0xe0, 0xac);
+            OK_BG = new Color(0x12, 0x30, 0x1f);
+            OK_LINE = new Color(0x1f, 0x52, 0x36);
+            ERR = new Color(0xff, 0x8a, 0x94);
+            WARN = new Color(0xff, 0xc9, 0x6b);
+        } else {
+            // 日间取网页 body.light 那一套：底 #f2f4f7 / 卡 #ffffff / 线 #e3e7ec /
+            // 主字 #1b1f26 / 次字 #57606a。OK/ERR/WARN 要压暗，
+            // 深色主题下用的浅绿浅粉在白底上会看不清。
+            BG_DEEP = new Color(0xf2, 0xf4, 0xf7);
+            BG_CARD = new Color(0xff, 0xff, 0xff);
+            BG_HOVER = new Color(0xf6, 0xf8, 0xfa);
+            BG_SEL = new Color(0xe8, 0xf0, 0xfd);
+            LINE = new Color(0xe3, 0xe7, 0xec);
+            LINE_SOFT = new Color(0xd5, 0xdb, 0xe3);
+
+            FG_TITLE = new Color(0x1b, 0x1f, 0x26);
+            FG_TEXT = new Color(0x1b, 0x1f, 0x26);
+            FG_SUB = new Color(0x57, 0x60, 0x6a);
+            FG_DIM = new Color(0x6b, 0x74, 0x80);
+            FG_MUTE = new Color(0x8b, 0x94, 0x9f);
+
+            BRAND = new Color(0x2f, 0x80, 0xed);
+            BRAND_DIM = new Color(0x1f, 0x66, 0xc8);
+            BRAND_LINK = new Color(0x16, 0x57, 0xb8);
+            LINK_SOFT = new Color(0x2f, 0x80, 0xed);
+
+            OK = new Color(0x1c, 0x7a, 0x48);
+            OK_BG = new Color(0xe8, 0xf6, 0xee);
+            OK_LINE = new Color(0xc3, 0xe6, 0xd2);
+            ERR = new Color(0xc0, 0x39, 0x2b);
+            WARN = new Color(0xa8, 0x6a, 0x00);
+        }
+    }
 
     // ---------------------------------------------------------------- 字体
 
@@ -292,6 +381,22 @@ final class Theme {
     static void install() {
         Font f = ui(13);
 
+        // 深浅切换会重跑 install()：色彩键全清一遍，否则上一次留下的浅灰描边、
+        // 选中色会粘在原生控件上（UIManager 只覆盖、不会自己失效）。
+        for (Object k : new java.util.ArrayList<>(UIManager.getDefaults().keySet())) {
+            if (!(k instanceof String)) continue;
+            String key = (String) k;
+            if (!key.endsWith(".background") && !key.endsWith(".foreground")
+                    && !key.endsWith("Color") && !key.equals("control")
+                    && !key.equals("info") && !key.equals("text")
+                    && !key.equals("menuText") && !key.equals("nimbusBase")
+                    && !key.equals("activeCaption") && !key.equals("activeCaptionText")) {
+                continue;
+            }
+            Object v = UIManager.getDefaults().get(key);
+            if (v instanceof ColorUIResource) UIManager.getDefaults().remove(key);
+        }
+
         UIManager.put("Panel.background", new ColorUIResource(BG_DEEP));
         UIManager.put("Panel.foreground", new ColorUIResource(FG_TEXT));
 
@@ -391,6 +496,15 @@ final class Theme {
         UIManager.put("activeCaptionText", new ColorUIResource(FG_TITLE));
     }
 
+    /**
+     * 切到指定模式并重装 UIManager。**只改色、不改已存在的窗口** ——
+     * 调用方负责重建界面（{@code new Main()} 或 {@code SwingUtilities.updateComponentTreeUI}）。
+     */
+    static void setDay(boolean dayMode) {
+        applyPalette(dayMode);
+        install();
+    }
+
     /** 当前列表行是否被选中时用的底色，供各处自定义渲染器复用 */
     static Color rowBg(boolean selected, boolean hover) {
         if (selected) return BG_SEL;
@@ -415,5 +529,305 @@ final class Theme {
         t.setBackground(BG_DEEP);
         t.setForeground(FG_SUB);
         t.setFont(ui(13));
+    }
+
+    /**
+     * 不重建窗口的前提下，尽量把颜色灌回已存在的组件。
+     *
+     * <p>能刷的只有「颜色是存在组件属性里、不是在构造时算死」的那些：
+     * 列表、文本区、滚动面板、下拉、标签、面板底色。自绘按钮
+     * （{@link FlatButtonUI}）每次 {@code paint} 都现读 {@code Theme} 字段，
+     * 所以它们连 {@code repaint()} 都不用，重建树即可。
+     *
+     * <p>真正做不到的是「布局代码里写死 {@code new Color(...)} 或
+     * {@code setBackground(当前色)} 的那部分」—— 那些只能靠重建窗口。
+     */
+    static void applyTo(java.awt.Component root) {
+        if (root == null) return;
+        if (root instanceof JComponent) {
+            ((JComponent) root).putClientProperty("usbnas.theme", day ? "day" : "night");
+        }
+        if (root instanceof JList) applyTo((JList<?>) root);
+        else if (root instanceof JScrollPane) applyTo((JScrollPane) root);
+        else if (root instanceof JTabbedPane) applyTo((JTabbedPane) root);
+        else if (root instanceof javax.swing.JTextArea) {
+            javax.swing.JTextArea ta = (javax.swing.JTextArea) root;
+            ta.setBackground(BG_DEEP);
+            ta.setForeground(FG_TEXT);
+            ta.setCaretColor(FG_TITLE);
+            ta.setSelectionColor(BRAND);
+            ta.setSelectedTextColor(Color.WHITE);
+        } else if (root instanceof javax.swing.text.JTextComponent
+                && !(root instanceof JTextField)) {
+            javax.swing.text.JTextComponent tc = (javax.swing.text.JTextComponent) root;
+            tc.setBackground(BG_CARD);
+            tc.setForeground(FG_TEXT);
+            tc.setCaretColor(FG_TITLE);
+            tc.setSelectionColor(BRAND);
+            tc.setSelectedTextColor(Color.WHITE);
+        } else if (root instanceof javax.swing.AbstractButton) {
+            javax.swing.AbstractButton b = (javax.swing.AbstractButton) root;
+            // 自绘按钮的颜色在 paint 里现取，这里只补原生按钮
+            if (!(b.getUI() instanceof FlatButtonUI)) b.setForeground(FG_TEXT);
+        } else if (root instanceof javax.swing.JLabel) {
+            ((javax.swing.JLabel) root).setForeground(FG_TEXT);
+        }
+        if (root instanceof java.awt.Container) {
+            java.awt.Container c = (java.awt.Container) root;
+            if (c.isOpaque() && !(c instanceof javax.swing.JList)
+                    && !(c instanceof JScrollPane) && !(c instanceof JTabbedPane)) {
+                c.setBackground(BG_DEEP);
+            }
+            for (java.awt.Component ch : c.getComponents()) applyTo(ch);
+        }
+        if (root instanceof JComponent) SwingUtilities.updateComponentTreeUI(root);
+        root.repaint();
+    }
+
+    // ---------------------------------------------------------------- 提示对话框
+
+    /**
+     * 统一替代 {@code JOptionPane.showMessageDialog / showConfirmDialog / showOptionDialog}。
+     *
+     * <p>为什么不用 JOptionPane：它把按钮交给当前 LAF 画。{@link #install()} 只改
+     * {@code UIManager} 的默认值，Windows LAF 的 {@code WindowsButtonUI} 会无视
+     * {@code Button.background} 自己画渐变 —— 于是深色窗口里弹出的一块浅灰面板配三枚
+     * 系统灰按钮，跟自绘的 {@code FlatButtonUI} 完全不是一套。
+     *
+     * <p>这里用自绘按钮 + 同一套底色重写一遍：
+     * {@code message(...)} 只有一个「好」，{@code confirm(...)} 给「取消 / 确定」，
+     * {@code options(...)} 返回被点中那一项的下标（关掉窗口返回 -1）。
+     */
+    static void message(java.awt.Component parent, String title, String text) {
+        options(parent, title, text, (String[]) null, new String[]{"好"});
+    }
+
+    /** @return true = 点了「确定」；取消/关窗 = false */
+    static boolean confirm(java.awt.Component parent, String title, String text,
+                           String okLabel, String cancelLabel, boolean danger) {
+        Integer r = options(parent, title, text, null, new String[]{cancelLabel, okLabel}, 1, danger);
+        return r != null && r == 1;
+    }
+
+    /**
+     * 正文是一整块自定义控件（登录框那种要收输入的场景）。
+     *
+     * @return true = 点了 {@code okLabel} 那个按钮
+     */
+    static boolean confirm(java.awt.Component parent, String title, String unusedText,
+                           JComponent body, String okLabel, String cancelLabel, boolean danger) {
+        final boolean[] ok = {false};
+        JPanel card = new JPanel(new BorderLayout(0, 14));
+        card.setBackground(BG_CARD);
+        card.setBorder(padding(18, 20, 16, 20));
+
+        JLabel head = new JLabel(title == null ? "" : title);
+        head.setFont(bold(15));
+        head.setForeground(FG_TITLE);
+        card.add(head, BorderLayout.NORTH);
+        card.add(body, BorderLayout.CENTER);
+
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        row.setOpaque(false);
+
+        JDialog dlg = new JDialog(
+                parent == null ? null
+                        : (parent instanceof java.awt.Window ? (java.awt.Window) parent
+                           : SwingUtilities.getWindowAncestor(parent)),
+                title == null ? "USBNASLink" : title, java.awt.Dialog.ModalityType.APPLICATION_MODAL);
+        dlg.setUndecorated(true);
+        dlg.setContentPane(card);
+        dlg.getRootPane().setBorder(BorderFactory.createLineBorder(LINE, 1, true));
+
+        JButton cancel = ghost(cancelLabel);
+        cancel.addActionListener(e -> dlg.dispose());
+        JButton commit = primary(okLabel);
+        if (danger) commit.setForeground(ERR);
+        commit.addActionListener(e -> {
+            ok[0] = true;
+            dlg.dispose();
+        });
+        row.add(cancel);
+        row.add(commit);
+        card.add(row, BorderLayout.SOUTH);
+
+        dlg.getRootPane().registerKeyboardAction(e -> dlg.dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        dlg.getRootPane().setDefaultButton(commit);
+        dlg.pack();
+        dlg.setLocationRelativeTo(parent);
+        dlg.setVisible(true);
+        return ok[0];
+    }
+
+    static Integer options(java.awt.Component parent, String title, String text,
+                           String[] bodyArgs, String[] buttons) {
+        return options(parent, title, text, bodyArgs, buttons, 0, false);
+    }
+
+    /**
+     * 正文是一整块自定义控件（影片信息那种塞了滚动面板的场景）。
+     * 与 {@link #options(java.awt.Component, String, String, String[], String[])} 的区别
+     * 只在第四参：那里是 {@code %s} 的替换值，这里是现成的控件。
+     *
+     * @return 被点中那一项的下标；关窗返回 null
+     */
+    static Integer options(java.awt.Component parent, String title, String text,
+                           JComponent body, String[] buttons) {
+        return options(parent, title, text, null, body, buttons, 0, false);
+    }
+
+    static Integer options(java.awt.Component parent, String title, String text,
+                           String[] bodyArgs, JComponent body,
+                           String[] buttons, int def, boolean danger) {
+        final int[] picked = {-1};
+
+        JPanel card = new JPanel(new BorderLayout(0, 14));
+        card.setBackground(BG_CARD);
+        card.setBorder(padding(18, 20, 16, 20));
+
+        JLabel head = new JLabel(title == null ? "" : title);
+        head.setFont(bold(15));
+        head.setForeground(FG_TITLE);
+        card.add(head, BorderLayout.NORTH);
+
+        JComponent center;
+        if (body != null) {
+            center = body;
+        } else {
+            String t = text == null ? "" : text;
+            if (bodyArgs != null && bodyArgs.length > 0) {
+                try {
+                    t = String.format(t, (Object[]) bodyArgs);
+                } catch (RuntimeException ignore) {
+                    // 格式串和参数对不上就原样显示——提示框不该二次抛错
+                }
+            }
+            JLabel msg = new JLabel("<html><body style='width:330px;font-size:12px;"
+                    + "color:" + hex(FG_SUB) + ";line-height:1.65'>"
+                    + t.replace("\n", "<br>") + "</body></html>");
+            msg.setFont(ui(12));
+            msg.setVerticalAlignment(SwingConstants.TOP);
+            center = msg;
+        }
+        card.add(center, BorderLayout.CENTER);
+
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        row.setOpaque(false);
+
+        JDialog dlg = new JDialog(
+                parent == null ? null
+                        : (parent instanceof java.awt.Window ? (java.awt.Window) parent
+                           : SwingUtilities.getWindowAncestor(parent)),
+                title == null ? "USBNASLink" : title, java.awt.Dialog.ModalityType.APPLICATION_MODAL);
+        dlg.setUndecorated(true);
+        dlg.setContentPane(card);
+        dlg.getRootPane().setBorder(BorderFactory.createLineBorder(LINE, 1, true));
+
+        JButton defaultBtn = null;
+        for (int i = 0; i < buttons.length; i++) {
+            boolean last = i == buttons.length - 1;
+            JButton b = (last && buttons.length > 1) ? primary(buttons[i]) : ghost(buttons[i]);
+            if (last && danger && buttons.length > 1) b.setForeground(ERR);
+            final int idx = i;
+            b.addActionListener(e -> {
+                picked[0] = idx;
+                dlg.dispose();
+            });
+            if (i == def) defaultBtn = b;
+            row.add(b);
+        }
+        card.add(row, BorderLayout.SOUTH);
+
+        dlg.getRootPane().registerKeyboardAction(e -> dlg.dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        if (defaultBtn != null) {
+            dlg.getRootPane().setDefaultButton(defaultBtn);
+            final JButton fb = defaultBtn;
+            SwingUtilities.invokeLater(fb::requestFocusInWindow);
+        }
+        dlg.pack();
+        dlg.setLocationRelativeTo(parent);
+        dlg.setVisible(true);
+        return picked[0] < 0 ? null : picked[0];
+    }
+
+    /**
+     * @param bodyArgs 正文里 {@code %s} 的替换值（可空）
+     * @param def     按钮默认高亮项下标（可空）
+     * @param danger  最后一个按钮是否画成危险动作（红字描边）
+     */
+    static Integer options(java.awt.Component parent, String title, String text,
+                           String[] bodyArgs, String[] buttons, int def, boolean danger) {
+        final int[] picked = {-1};
+
+        JPanel card = new JPanel(new BorderLayout(0, 14));
+        card.setBackground(BG_CARD);
+        card.setBorder(padding(18, 20, 16, 20));
+
+        JLabel head = new JLabel(title == null ? "" : title);
+        head.setFont(bold(15));
+        head.setForeground(FG_TITLE);
+        card.add(head, BorderLayout.NORTH);
+
+        String body = text == null ? "" : text;
+        if (bodyArgs != null && bodyArgs.length > 0) {
+            try {
+                body = String.format(body, (Object[]) bodyArgs);
+            } catch (RuntimeException ignore) {
+                // 格式串和参数对不上就原样显示——提示框不该二次抛错
+            }
+        }
+        JLabel msg = new JLabel("<html><body style='width:330px;font-size:12px;"
+                + "color:" + hex(FG_SUB) + ";line-height:1.65'>"
+                + body.replace("\n", "<br>") + "</body></html>");
+        msg.setFont(ui(12));
+        msg.setVerticalAlignment(SwingConstants.TOP);
+        card.add(msg, BorderLayout.CENTER);
+
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        row.setOpaque(false);
+
+        final JDialog[] holder = new JDialog[1];
+        java.util.List<JButton> made = new java.util.ArrayList<>();
+        for (int i = 0; i < buttons.length; i++) {
+            boolean last = i == buttons.length - 1;
+            JButton b = (last && buttons.length > 1) ? primary(buttons[i]) : ghost(buttons[i]);
+            if (last && danger && buttons.length > 1) b.setForeground(ERR);
+            final int idx = i;
+            b.addActionListener(e -> {
+                picked[0] = idx;
+                if (holder[0] != null) holder[0].dispose();
+            });
+            made.add(b);
+            row.add(b);
+        }
+        card.add(row, BorderLayout.SOUTH);
+
+        java.awt.Window owner = parent == null ? null
+                : (parent instanceof java.awt.Window ? (java.awt.Window) parent
+                   : SwingUtilities.getWindowAncestor(parent));
+        JDialog dlg = new JDialog(owner, title == null ? "USBNASLink" : title,
+                java.awt.Dialog.ModalityType.APPLICATION_MODAL);
+        holder[0] = dlg;
+        dlg.setUndecorated(true);
+        dlg.setContentPane(card);
+        dlg.getRootPane().setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(LINE, 1, true), padding(0, 0, 0, 0)));
+        // Esc / 回车都要有反应，键盘用户不该被卡住
+        dlg.getRootPane().registerKeyboardAction(e -> dlg.dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        if (def >= 0 && def < made.size()) {
+            dlg.getRootPane().setDefaultButton(made.get(def));
+            SwingUtilities.invokeLater(made.get(def)::requestFocusInWindow);
+        }
+        dlg.pack();
+        dlg.setLocationRelativeTo(parent);
+        dlg.setVisible(true);
+
+        return picked[0] < 0 ? null : picked[0];
     }
 }

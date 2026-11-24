@@ -29,6 +29,7 @@ public final class AppPrefs {
     private static final String KEY_SKIP_VERSION = "skip_version";
     /** 上次检查更新的 wall clock 毫秒 */
     private static final String KEY_LAST_UPDATE_CHECK = "last_update_check";
+    private static final String KEY_THEME = "theme";
 
     /** 标题最大长度，太长会把首页顶栏和网页 header 挤坏 */
     public static final int TITLE_MAX = 24;
@@ -312,5 +313,50 @@ public final class AppPrefs {
 
     public static void setLastUpdateCheck(Context c, long ms) {
         sp(c).edit().putLong(KEY_LAST_UPDATE_CHECK, ms).apply();
+    }
+
+    // ==================== 配色主题 ====================
+    //
+    // 一个字符串管三端：网页端（服务端自己吐的 HTML）、exe 客户端、APK 客户端
+    // 都读这一个值，这样「在同一台 NAS 上，手机看到的底色和电脑看到的底色一样」。
+    //
+    // 为什么存在服务端而不是各端自己存：
+    //   客户端拿不到别的设备的偏好；而用户要的恰恰是「同设备的网页端与客户端
+    //   看起来一致」。所以把主题当成一项站点级配置（和站点名称同性质）。
+    //
+    // 三种取值：dark（默认）/ light / ink（水墨屏）。
+    // 非法值一律回落到 dark，避免某个旧客户端写进奇怪字符串把页面搞坏。
+
+    public static final String THEME_DARK = "dark";
+    public static final String THEME_LIGHT = "light";
+    public static final String THEME_INK = "ink";
+
+    /** 当前主题，默认 dark */
+    public static String theme(Context c) {
+        String s = sp(c).getString(KEY_THEME, THEME_DARK);
+        return normalizeTheme(s);
+    }
+
+    /** 保存主题；返回值是真正落盘的规范化结果 */
+    public static String setTheme(Context c, String raw) {
+        String s = normalizeTheme(raw);
+        sp(c).edit().putString(KEY_THEME, s).apply();
+        return s;
+    }
+
+    /** 把任意输入钳成 dark / light / ink 三者之一 */
+    public static String normalizeTheme(String raw) {
+        if (raw == null) return THEME_DARK;
+        String s = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if (THEME_LIGHT.equals(s) || THEME_INK.equals(s)) return s;
+        return THEME_DARK;
+    }
+
+    /** 主题的中文名，给按钮和提示用 */
+    public static String themeName(String mode) {
+        String s = normalizeTheme(mode);
+        if (THEME_LIGHT.equals(s)) return "日间";
+        if (THEME_INK.equals(s)) return "水墨";
+        return "夜间";
     }
 }

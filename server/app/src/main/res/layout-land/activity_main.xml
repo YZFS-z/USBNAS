@@ -155,6 +155,56 @@
                     </LinearLayout>
                 </LinearLayout>
 
+                <!-- 第 1.5 行：外接盘休眠 + 曲库目录 + 自动更新。
+                     横屏是这台机器的常态（插在底座上当相框），所以这些跟竖屏布局
+                     必须一一对应 —— 少一个 id，MainActivity 的 findViewById 就返回
+                     null，按钮在横屏下等于不存在。 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_card"
+                    android:baselineAligned="false"
+                    android:orientation="horizontal"
+                    android:padding="12dp">
+
+                    <Button
+                        android:id="@+id/btnUsbSleep"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:text="U 盘休眠" />
+
+                    <Button
+                        android:id="@+id/btnUsbSleepNow"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="立即停转" />
+
+                    <Button
+                        android:id="@+id/btnUpdate"
+                        style="@style/BtnGhostTight"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="自动更新 关" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvUpdate"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center_vertical"
+                    android:minHeight="40dp"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:text="版本 —"
+                    android:textColor="#8A93A0"
+                    android:textSize="11sp" />
+
                 <!-- 第 2 行：系统权限，四个按钮一行排开 -->
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -249,11 +299,15 @@
         </ScrollView>
     </ViewFlipper>
 
-    <!-- 底部翻页指示条 -->
+    <!-- 底部翻页条。
+         原来只有 16dp 高、文字 10sp、上下 padding 各 0~1dp，等于在 2400 宽的
+         底边挂了一粒米 —— 而这台机器插在底座上当相框，翻页全靠手指点它。
+         现在翻页条 26dp、胶囊页签 20dp，可点面积仍是原来的两倍多；
+         多出来的 10dp 从 ViewFlipper 的可伸缩高度里出，页面内容一行没少。 -->
     <LinearLayout
         android:id="@+id/pageBar"
         android:layout_width="match_parent"
-        android:layout_height="16dp"
+        android:layout_height="26dp"
         android:background="@android:color/transparent"
         android:gravity="center"
         android:orientation="horizontal">
@@ -261,28 +315,28 @@
         <TextView
             android:id="@+id/dot0"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="20dp"
             android:background="@drawable/bg_pill"
-            android:paddingStart="9dp"
-            android:paddingTop="0dp"
-            android:paddingEnd="9dp"
-            android:paddingBottom="0dp"
+            android:gravity="center"
+            android:minWidth="84dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:text="概览"
             android:textColor="@color/accent"
-            android:textSize="10sp" />
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/dot1"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:paddingStart="9dp"
-            android:paddingTop="1dp"
-            android:paddingEnd="9dp"
-            android:paddingBottom="1dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="12dp"
+            android:gravity="center"
+            android:minWidth="84dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:text="控制"
             android:textColor="@color/textMute"
-            android:textSize="10sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 
 </LinearLayout>

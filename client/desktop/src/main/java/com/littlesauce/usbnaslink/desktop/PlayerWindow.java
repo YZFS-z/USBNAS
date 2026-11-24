@@ -33,11 +33,11 @@ final class PlayerWindow extends JFrame {
     private final JLabel sub = new JLabel(" ", SwingConstants.CENTER);
     private final JProgressBar bar = new JProgressBar();
     private final JLabel timeText = new JLabel("00:00 / 00:00");
-    private final JButton prevBtn = new JButton("上一首");
-    private final JButton playBtn = new JButton("播放");
-    private final JButton nextBtn = new JButton("下一首");
-    private final JComboBox<Music.Mode> modeBox = new JComboBox<>(Music.Mode.values());
-    private final JCheckBox lyricBox = new JCheckBox("桌面歌词");
+    private final JButton prevBtn = Theme.ghost("上一首");
+    private final JButton playBtn = Theme.primary("播放");
+    private final JButton nextBtn = Theme.ghost("下一首");
+    private final JComboBox<Music.Mode> modeBox = Theme.combo(Music.Mode.values());
+    private final JCheckBox lyricBox = Theme.check("桌面歌词", false);
     private final DefaultListModel<Track> model = new DefaultListModel<>();
     private final JList<Track> qList = new JList<>(model);
 
@@ -72,6 +72,7 @@ final class PlayerWindow extends JFrame {
         head.add(title, BorderLayout.NORTH);
         head.add(sub, BorderLayout.SOUTH);
 
+        Theme.progress(bar);
         bar.setStringPainted(false);
         bar.setValue(0);
         timeText.setFont(Theme.mono(11));
@@ -116,18 +117,11 @@ final class PlayerWindow extends JFrame {
 
         JPanel ctl = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
         ctl.setOpaque(false);
-        style(prevBtn);
-        style(playBtn);
-        style(nextBtn);
         ctl.add(prevBtn);
         ctl.add(playBtn);
         ctl.add(nextBtn);
         ctl.add(new JLabel(" "));
-        modeBox.setBackground(Theme.BG_CARD);
-        modeBox.setForeground(Theme.FG_TEXT);
         ctl.add(modeBox);
-        lyricBox.setOpaque(false);
-        lyricBox.setForeground(Theme.FG_TEXT);
         ctl.add(lyricBox);
 
         root.add(head, BorderLayout.NORTH);
@@ -157,11 +151,9 @@ final class PlayerWindow extends JFrame {
         ticker.setRepeats(true);
     }
 
-    private static void style(JButton b) {
-        b.setBackground(Theme.BG_SEL);
-        b.setForeground(Theme.FG_TITLE);
-        b.setFocusPainted(false);
-        b.setBorder(BorderFactory.createEmptyBorder(7, 16, 7, 16));
+    /** 播放/暂停切换时只换字，不换 UI —— 按钮圆角底色由 FlatButtonUI 自绘 */
+    private void setPlayLabel(String text) {
+        playBtn.setText(text);
     }
 
     void setTarget(String base, String sid) {
@@ -201,7 +193,7 @@ final class PlayerWindow extends JFrame {
             clip.stop();
         }
         playing = false;
-        playBtn.setText("播放");
+        setPlayLabel("播放");
         if (ticker != null) ticker.stop();
     }
 
@@ -209,7 +201,7 @@ final class PlayerWindow extends JFrame {
         if (vlc != null && vlc.isActive()) {
             vlc.resume();
             playing = true;
-            playBtn.setText("暂停");
+            setPlayLabel("暂停");
             if (ticker != null) ticker.start();
             return;
         }
@@ -221,7 +213,7 @@ final class PlayerWindow extends JFrame {
         clip.start();
         playStartMs = System.currentTimeMillis() - pauseAtMs;
         playing = true;
-        playBtn.setText("暂停");
+        setPlayLabel("暂停");
         if (ticker != null) ticker.start();
     }
 
@@ -248,7 +240,7 @@ final class PlayerWindow extends JFrame {
         if (t == null) return;
         closeClip();
         playing = false;
-        playBtn.setText("播放");
+        setPlayLabel("播放");
 
         String nm = t.title == null || t.title.isEmpty() ? t.name : t.title;
         title.setText(nm);
@@ -272,7 +264,7 @@ final class PlayerWindow extends JFrame {
             if (e.play(audio, ck)) {
                 sub.setText(t.dir + "    ·    libvlc");
                 playing = true;
-                playBtn.setText("暂停");
+                setPlayLabel("暂停");
                 ticker.start();
                 loadLyrics(base, ck, t);
                 return;
@@ -323,7 +315,7 @@ final class PlayerWindow extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     clip = new ClipHolder(line, ais, totalMsF);
                     playing = true;
-                    playBtn.setText("暂停");
+                    setPlayLabel("暂停");
                     playStartMs = System.currentTimeMillis();
                     ticker.start();
                 });
@@ -352,7 +344,7 @@ final class PlayerWindow extends JFrame {
 
     private void onEnded() {
         playing = false;
-        playBtn.setText("播放");
+        setPlayLabel("播放");
         if (ticker != null) ticker.stop();
         bar.setValue(100);
         Track t = list.onEnded();

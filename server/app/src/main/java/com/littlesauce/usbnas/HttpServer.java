@@ -381,6 +381,10 @@ public class HttpServer {
     private static final int STREAM_BUFFER = 8 * 1024 * 1024; // 8MB，播放不卡顿
     /** 登录会话 Cookie 名 */
     private static final String COOKIE_NAME = "usbnas_sid";
+    /** Cookie 默认寿命：一天（不勾「记住该设备」时的行为） */
+    private static final int COOKIE_AGE_DEFAULT = 86400;
+    /** 勾了「记住该设备」之后的 Cookie 寿命：一年 */
+    private static final int COOKIE_AGE_REMEMBER = 365 * 24 * 3600;
     /** 会话有效期：24 小时 */
     private static final long SESSION_TTL_MS = 24 * 60 * 60 * 1000L;
 
@@ -548,8 +552,13 @@ public class HttpServer {
      * 不再把「该显示日间还是夜间」这件事全押在浏览器脚本上。老 WebView 里
      * localStorage、matchMedia、cssRules 任何一样瘸了，?theme=light 就不会应验。
      *
-     * 语义是「同一个访客最近一次明确表达过的偏好」：请求带 ?theme= 时立刻改写，
-     * 之后的普通请求沿用同一个值，所以点完按钮再点进目录，颜色不会跳回夜间。
+     * 语义是「这台 NAS 的配色」：请求带 ?theme= 时立刻改写，之后的普通请求
+     * 沿用同一个值，所以点完按钮再点进目录，颜色不会跳回夜间。
+     *
+     * 这个值不只给网页用 —— exe 与 APK 客户端在「管理设置」里读写的也是它。
+     * 三端共用一份，用户才可能得到「同一台设备上网页与客户端底色一致」。
+     * 真源在 AppPrefs（键 theme），这里是内存镜像：改的时候两边一起改，
+     * 服务端重启后从 AppPrefs 读回来。
      */
     private volatile String prefTheme = "dark";
 
@@ -570,6 +579,13 @@ public class HttpServer {
         this.cfg.owner = this;
         this.roots = roots;
         this.listener = listener;
+        // 主题从持久化里读回来：三端共用一份，网页上点过日间，客户端重启服务后
+        // 也还是日间。cfg 里没有 Context，所以用静态的 appCtx()。
+        try {
+            this.prefTheme = AppPrefs.theme(appCtx());
+        } catch (Throwable ignored) {
+            this.prefTheme = AppPrefs.THEME_DARK;
+        }
     }
 
     /**
@@ -691,8 +707,15 @@ public class HttpServer {
             // ?theme=light / ?theme=dark / ?theme=ink：老浏览器上脚本靠不住时，这是唯一
             // 能真正生效的切换入口。请求走到这里就把偏好记下，本页和后续
             // 页面都由服务端直接吐对应的覆盖样式。
+            //
+            // 注意：这里**写盘**（AppPrefs），不再只是内存偏好。理由是三端统一 ——
+            // 网页上点一下日间，exe/APK 客户端下次进管理设置就该看到「日间」。
+            // 只读用户也能改主题：它不影响任何数据，只是配色。
             String tq = req.param("theme");
-            if ("light".equals(tq) || "dark".equals(tq) || "ink".equals(tq)) prefTheme = tq;
+            if ("light".equals(tq) || "dark".equals(tq) || "ink".equals(tq)) {
+                prefTheme = tq;
+                AppPrefs.setTheme(appCtx(), tq);
+            }
             req.user = cfg.auth(req);
 
             // ---- 认证 ----
@@ -775,6 +798,11 @@ public class HttpServer {
         if (p != null && p.equals("/_photos/delete")) {
             return true;
         }
+        // 配色主题：读随便读（客户端要能问出当前主题），写由 handler 判登录。
+        // 在这一层一刀切会害得未登录的客户端连「现在是什么主题」都问不到。
+        if (p != null && p.equals("/_theme")) {
+            return true;
+        }
         // 书库正文抽取：这是真·正文，但它和 /view、/play/* 是同一层东西 ——
         // 能看列表就能看内容（文件本身也一直是这么发的）。差别在于这里给了
         // resolve() + inDirs() 两道约束，只能抽书库目录里的书。
@@ -788,7 +816,39 @@ public class HttpServer {
         boolean readMethod = "GET".equals(req.method) || "HEAD".equals(req.method)
                 || "OPTIONS".equals(req.method) || "PROPFIND".equals(req.method);
 
-        return cfg.anonymousRead && readMethod;
+        if (cfg.anonymousRead && readMethod) return true;
+
+        // 到这儿说明是匿名的内容请求。清单类端点（/_music 等）早就各自返回了，
+        // 留下来的基本都是「真·文件体」：/mnt/.../x.jpg、/view?f=、/play/...。
+        // 这些一律要求登录 —— 匿名只允许「知道有什么」，不允许「看到东西」。
+        return false;
+    }
+
+    /**
+     * 匿名能不能直接取这个文件的内容。
+     *
+     * <p>规矩只有一条：**能看见清单，不等于能看见文件**。没登录的人应该
+     * 知道库里有《哭砂》、有这部片子、有这本 PDF，但点开看到画面/听到声音/
+     * 读到正文，那得先登录。这也顺带堵掉了「拿浏览器地址栏直接拼路径搬库」
+     * 这条路 —— 以前只要在局域网里，谁都能把整个媒体库抓走。
+     *
+     * <p>判断顺序刻意从「便宜且确定」往「贵」排：先看扩展名白名单，
+     * 只有媒体/文档类才需要登录；其余的（.txt 配置、.part 半截文件、
+     * 目录列表页）不因为这条规矩变天。
+     */
+    private boolean needLoginForFile(Request req, File f) {
+        if (f == null || !f.isFile()) return false;
+        if (!cfg.hasAccounts()) return false;
+        if (req != null && req.user != null) return false;
+        if (!cfg.anonymousRead) return true; // 关掉了匿名读：所有内容都要登录
+        String name = f.getName();
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) return false;
+        String ext = name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        if (isPhotoName(name)) return true;
+        if (AUDIO_EXT.contains(ext)) return true;
+        if (VIDEO_EXT.contains(ext)) return true;
+        return canPreview(ext);
     }
 
     /** 写操作（PUT / MKCOL / MOVE）权限；target 为 null 时只查等级 */
@@ -964,8 +1024,12 @@ public class HttpServer {
                     StringBuilder sb = new StringBuilder();
                     sb.append("HTTP/1.1 303 See Other\r\n");
                     sb.append("Location: ").append(back).append("\r\n");
+                    // 「记住该设备」勾了就存一年，否则仍是原来的一天。
+                    // 用 Max-Age（相对秒）而不是 Expires：手机时钟不准时不会立刻过期。
+                    boolean remember = "1".equals(form.get("remember"));
                     sb.append("Set-Cookie: ").append(COOKIE_NAME).append('=').append(token)
-                            .append("; Path=/; Max-Age=86400; SameSite=Lax\r\n");
+                            .append("; Path=/; Max-Age=").append(remember ? COOKIE_AGE_REMEMBER : COOKIE_AGE_DEFAULT)
+                            .append("; SameSite=Lax\r\n");
                     sb.append("Content-Type: text/plain; charset=utf-8\r\n");
                     sb.append("Content-Length: ").append(body.length).append("\r\n");
                     sb.append("Connection: close\r\n\r\n");
@@ -1102,6 +1166,11 @@ public class HttpServer {
             sb.append("Connection: close\r\n\r\n");
             out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
             out.write(body);
+            return;
+        }
+
+        if (path.equals("/_theme")) {
+            handleTheme(req, in, out);
             return;
         }
 
@@ -1341,6 +1410,15 @@ public class HttpServer {
         if (f.isDirectory()) {
             sendHtml(out, renderListing(req, f));
         } else {
+            // 目录列表可以给匿名的看（「库里有这些东西」），文件体不行：
+            // 图片/音频/视频/PDF/Office/纯文本正文一律要登录。
+            // 回页面而不是裸 401 —— 401 在浏览器里会弹 Basic 认证框，
+            // 而我们的登录是表单式 /_login，弹框只会让人以为坏了。
+            if (needLoginForFile(req, f)) {
+                sendHtml(out, 401, renderLogin(null, "先登录才能看内容（清单可以随便看）",
+                        "/" + f.getName()));
+                return;
+            }
             sendFile(req, out, f);
         }
     }
@@ -8228,6 +8306,12 @@ public class HttpServer {
                     + "background:#3a1d22;color:#ff9aa2;font-size:13px}"
                     + ".login .anon{margin-top:16px;text-align:center;font-size:12px}"
                     + ".login .anon a{color:#5aa9ff;text-decoration:none}"
+                    // 「记住该设备」这一行：checkbox 与文字横排，且不能吃 .login input 的
+                    // 全宽/大内边距/深色输入框样式（那条选择器是 .login input，会被套上）。
+                    + ".login label.rem{display:flex;align-items:center;gap:8px;"
+                    + "font-size:12px;color:#9aa4b2;margin:16px 0 0;letter-spacing:0;cursor:pointer}"
+                    + ".login label.rem input[type=checkbox]{width:16px;height:16px;flex:0 0 auto;"
+                    + "margin:0;padding:0;border-radius:4px;accent-color:#2f80ed;cursor:pointer}"
                     // 管理页
                     + ".adm-top{display:flex;align-items:baseline;gap:12px;margin:18px 0 12px}"
                     + ".adm-top h2{margin:0;font-size:19px;color:#e6e9ef}"
@@ -8290,6 +8374,37 @@ public class HttpServer {
                     + "#2f80ed,#8b5cf6);color:#fff;font-size:14px;font-weight:600;"
                     + "padding:10px 20px;cursor:pointer}"
                     + ".adm-cnt{font-size:12px;color:#6b7480}"
+                    // ---- 自动更新的键值行 ----
+                    // 版本/状态这些信息原来是夹在一段说明里的，扫不出来；
+                    // 现在做成两列网格：左列标签右列值，眼睛一行一行过就行。
+                    + ".adm-kv{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;"
+                    + "margin-bottom:12px;padding:11px 13px;border-radius:10px;"
+                    + "background:#11161d;border:1px solid #1d242e;font-size:12px}"
+                    + ".adm-kv span{color:#6b7480}"
+                    + ".adm-kv b{color:#c3cad4;font-weight:600}"
+                    + ".adm-ok{color:#6fcf97 !important}"
+                    + ".adm-off{color:#f2994a !important}"
+                    // ---- 账号管理 ----
+                    // 一行 = 一个账号的全部信息与操作。表单是块级的，所以这里用
+                    // flex 把「等级下拉 + 新密码 + 保存」压成一行，窄屏自动折行。
+                    + ".adm-user{background:#11161d;border:1px solid #232a34;border-radius:12px;"
+                    + "padding:12px 13px;margin-bottom:10px}"
+                    + ".adm-user-top{display:flex;align-items:center;flex-wrap:wrap;gap:8px;"
+                    + "margin-bottom:9px}"
+                    + ".adm-user-name{font-size:14px;font-weight:700;color:#e6e9ef}"
+                    + ".adm-user-on{font-size:11px;color:#7d8899;margin-left:auto}"
+                    + ".adm-tag{font-size:10px;color:#8ab4f8;border:1px solid #24405f;"
+                    + "border-radius:6px;padding:1px 6px}"
+                    + ".adm-user .adm-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}"
+                    + ".adm-user .adm-inp{width:auto;flex:1;min-width:150px;font-size:13px;"
+                    + "padding:8px 10px}"
+                    + ".adm-user .adm-btn{padding:8px 16px;font-size:13px}"
+                    + ".adm-user-act{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}"
+                    + ".adm-user-act .adm-form{display:flex}"
+                    + ".adm-btn-warn{background:#7d2233;color:#ffd7dc}"
+                    + ".adm-user-new{margin-top:12px;padding-top:12px;border-top:1px solid #1d242e;"
+                    + "display:flex;flex-wrap:wrap;gap:8px;align-items:center}"
+                    + ".adm-user-new .adm-inp{flex:1;min-width:130px}"
                     + ".adm-foot{margin:18px 0 40px;font-size:12px;color:#5d6773;text-align:center}"
                     + "body.light .adm-top h2{color:#1b1f26}"
                     + "body.light .adm-sect{background:#fff;border-color:#dbe0e7}"
@@ -8311,6 +8426,16 @@ public class HttpServer {
                     + "border-color:#d3dae3;color:#1b1f26}"
                     + "body.light .adm-note{background:#e8f7ee;border-color:#a9dcbd;color:#1c6b3e}"
                     + "body.light .adm-cnt,body.light .adm-foot,body.light .adm-more{color:#6b7480}"
+                    + "body.light .adm-user{background:#f6f8fa;border-color:#d3dae3}"
+                    + "body.light .adm-user-name{color:#1b1f26}"
+                    + "body.light .adm-user-on{color:#6b7480}"
+                    + "body.light .adm-tag{color:#0b64c8;border-color:#b8d3f0}"
+                    + "body.light .adm-kv{background:#f6f8fa;border-color:#d3dae3}"
+                    + "body.light .adm-kv span{color:#6b7480}"
+                    + "body.light .adm-kv b{color:#31363d}"
+                    + "body.light .adm-ok{color:#1c7a48 !important}"
+                    + "body.light .adm-off{color:#b05a12 !important}"
+                    + "body.light .adm-btn-warn{background:#f7d7dc;color:#8a1f30}"
                     + "body.ink .adm-top h2{color:#232323}"
                     + "body.ink .adm-sect{background:#f2f2f2;border-color:#c6c6c6}"
                     + "body.ink .adm-h{color:#232323}"
@@ -8331,6 +8456,16 @@ public class HttpServer {
                     + "body.ink .adm-btn{background:#5e5e5e;color:#f2f2f2}"
                     + "body.ink .adm-note{background:#cfcfcf;border-color:#a8a8a8;color:#232323}"
                     + "body.ink .adm-cnt,body.ink .adm-foot,body.ink .adm-more{color:#6e6e6e}"
+                    + "body.ink .adm-user{background:#dedede;border-color:#c6c6c6}"
+                    + "body.ink .adm-user-name{color:#232323}"
+                    + "body.ink .adm-user-on{color:#6e6e6e}"
+                    + "body.ink .adm-tag{color:#3f3f3f;border-color:#b8b8b8}"
+                    + "body.ink .adm-kv{background:#e8e8e8;border-color:#c6c6c6}"
+                    + "body.ink .adm-kv span{color:#6e6e6e}"
+                    + "body.ink .adm-kv b{color:#2b2b2b}"
+                    + "body.ink .adm-ok{color:#2c6b3f !important}"
+                    + "body.ink .adm-off{color:#8a4a12 !important}"
+                    + "body.ink .adm-btn-warn{background:#c8c8c8;color:#232323}"
                     // 上面这一族是登录页专用的，深色值全部写死在 .login 作用域里。
                     // 通用那条 body.light .login 只清了容器底，卡片里面还是黑的：
                     // 标题是 #e6e9ef（浅字）、说明/标签是 #6b7480、错误条是 #3a1d22 底。
@@ -8346,6 +8481,7 @@ public class HttpServer {
                     + "border:1px solid #e8a0a0}"
                     + "body.light .login .anon{color:#57606a}"
                     + "body.light .login .anon a{color:#0b64c8}"
+                    + "body.light .login label.rem{color:#57606a}"
                     // 水墨屏同构：整卡改成灰阶，错误条只靠深浅区分，不留红/蓝。
                     + "body.ink .login h2{color:#232323}"
                     + "body.ink .login .sub,body.ink .login label{color:#6e6e6e}"
@@ -8358,6 +8494,8 @@ public class HttpServer {
                     + "body.ink .login .anon{color:#6e6e6e}"
                     + "body.ink .login .anon a{color:#4e4e4e;"
                     + "text-decoration:underline}"
+                    + "body.ink .login label.rem{color:#4e4e4e}"
+                    + "body.ink .login label.rem input[type=checkbox]{accent-color:#5e5e5e}"
                     // 实时状态面板
                     + ".live{background:#171b22;border:1px solid #232a34;border-radius:14px;"
                     + "padding:14px 16px;margin-bottom:20px}"
@@ -9415,13 +9553,109 @@ public class HttpServer {
 
     // ==================== 网页端管理页 ====================
 
+    // ---- 会话枚举与踢下线 ----
+    //
+    // 会话表是 token → 用户名，要知道「某个账号现在有几台设备在线」就得反过来扫一遍。
+    // 量很小（家里几台机器），每次扫全表比分两级索引省心。
+    // 踢人 = 把该用户名的所有 token 从表里删掉；下一次请求带旧 Cookie 就变匿名，
+    // 客户端那边过一轮就会自己弹「登录已过期」。
+
+    /** 某账号当前在线的 token 列表（快照） */
+    private List<String> sessionTokensOf(String user) {
+        List<String> out = new ArrayList<>();
+        if (user == null) return out;
+        for (Map.Entry<String, String> e : sessions.entrySet()) {
+            if (user.equals(e.getValue())) out.add(e.getKey());
+        }
+        return out;
+    }
+
+    /** 某账号当前在线设备数 */
+    private int sessionCountOf(String user) {
+        return sessionTokensOf(user).size();
+    }
+
+    /** 踢掉某账号的全部会话，返回踢掉的数量 */
+    private int sessionKillUser(String user) {
+        List<String> toks = sessionTokensOf(user);
+        for (String t : toks) sessionKill(t);
+        return toks.size();
+    }
+
+    // ---- 账号管理的小工具 ----
+
+    /**
+     * 把一次账号改动后的结果翻成一句中文。
+     *
+     * 这里刻意集中了三条「管理员手滑就会把全家锁在门外」的保护：
+     *   1. 不允许把自己降级 —— 降完就没有管理页可用了，只能去 App 里救；
+     *   2. 不允许把自己删掉，理由同上；
+     *   3. 不允许删掉最后一个管理员 —— 哪怕操作者不是他，结果一样是没人能管。
+     * 三条都用「操作者是谁 + 改完还剩几个管理员」来判断，而不是硬编码 admin 这个名字。
+     */
+    private String guardUserChange(Request req, String target, int newLevel, boolean deleting) {
+        String me = req.user == null ? null : req.user.name;
+        boolean isMe = me != null && me.equals(target);
+        if (deleting) {
+            if (isMe) return "不能删除当前登录的账号（会把自己锁在门外）";
+            if (req.user != null && req.user.level >= Users.LEVEL_ADMIN) {
+                int admins = 0;
+                for (Users.User u : Users.list(appCtx())) {
+                    if (u.level >= Users.LEVEL_ADMIN && !u.name.equals(target)) admins++;
+                }
+                if (admins <= 0) return "这是最后一个管理员，删了就没有人能改设置了";
+            }
+            return null;
+        }
+        if (isMe && newLevel < Users.LEVEL_ADMIN) {
+            return "不能把自己降成非管理员（改完就进不来这个页面了）";
+        }
+        if (newLevel < Users.LEVEL_ADMIN && req.user != null
+                && req.user.level >= Users.LEVEL_ADMIN) {
+            int admins = 0;
+            for (Users.User u : Users.list(appCtx())) {
+                if (u.level >= Users.LEVEL_ADMIN && !u.name.equals(target)) admins++;
+            }
+            if (admins <= 0 && isMe) return "不能把自己降成非管理员（改完就进不来这个页面了）";
+        }
+        return null;
+    }
+
+    /** 等级下拉的 HTML 片段（三个选项固定，顺序从高到低，管理员排第一） */
+    private static String levelSelect(String name, int cur) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<select class='adm-inp' name='").append(name).append("'>");
+        for (int lv = Users.LEVEL_ADMIN; lv >= Users.LEVEL_READ; lv--) {
+            sb.append("<option value='").append(lv).append('\'');
+            if (lv == cur) sb.append(" selected");
+            sb.append('>').append(esc(Users.levelName(lv)))
+              .append(" · ").append(esc(Users.levelDesc(lv))).append("</option>");
+        }
+        return sb.append("</select>").toString();
+    }
+
+    private static int parseLevel(String s) {
+        try {
+            int v = Integer.parseInt(s == null ? "" : s.trim());
+            if (v < Users.LEVEL_READ) return Users.LEVEL_READ;
+            if (v > Users.LEVEL_ADMIN) return Users.LEVEL_ADMIN;
+            return v;
+        } catch (NumberFormatException e) {
+            return Users.LEVEL_READ;
+        }
+    }
+
     /**
      * GET /_admin  —— 管理页
-     * POST /_admin —— 提交表单（action=music / video / title）
+     * POST /_admin —— 提交表单（action=music / video / book / photo / title / update /
+     *                 unskip / useradd / userset / userdel / userkick）
      *
      * 为什么不在 App 里做：目录这种东西一台设备配一次就够，但配它的人
      * 往往正坐在电脑前整理文件。网页端已经能浏览全盘目录了，顺手把
      * 「指目录」这件事放在同一处，比让人拿起手机去点一堆多选框自然。
+     *
+     * 账号管理同理放在这里：建号 / 改等级 / 改密码 / 踢下线 / 删号 ——
+     * 这些操作天生是「打字 + 看列表」，在手机上点不如在电脑上敲。
      *
      * 权限：必须登录且 level >= LEVEL_ADMIN。没有账号（单机模式）时
      * 一律拒绝 —— 这种模式本来就是匿名全开，再给个管理页等于把
@@ -9479,6 +9713,61 @@ public class HttpServer {
             } else if ("unskip".equals(action)) {
                 AppPrefs.setSkipVersion(appCtx(), "");
                 msg = "已清除跳过标记";
+            } else if ("useradd".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                String pw = form.containsKey("password") ? form.get("password") : "";
+                int lv = parseLevel(form.get("level"));
+                String err = Users.upsertEx(appCtx(), name, lv, pw);
+                if (err != null) {
+                    msg = "建号失败：" + err;
+                } else {
+                    // 保存后必须重建快照：cfg.users 是不可变快照，只有 reload()
+                    // 和删号分支会刷。不刷的话「刚建的号」在登录里去查旧快照，
+                    // 会 401 到服务端重启为止。
+                    cfg.users = Users.Snapshot.of(appCtx());
+                    msg = "已创建「" + name + "」（" + Users.levelName(lv) + "）";
+                    log("管理页：创建账号 " + name + " level=" + lv);
+                }
+            } else if ("userset".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                String pw = form.containsKey("password") ? form.get("password") : "";
+                int lv = parseLevel(form.get("level"));
+                String guard = guardUserChange(req, name, lv, false);
+                if (guard != null) {
+                    msg = guard;
+                } else {
+                    String err = Users.upsertEx(appCtx(), name, lv, pw);
+                    if (err != null) {
+                        msg = "修改失败：" + err;
+                    } else {
+                        // 改密码要把这个人已登录的会话全踢掉：不然旧密码发的 Cookie
+                        // 还能用，改密码等于没改。
+                        int kicked = pw != null && !pw.isEmpty() ? sessionKillUser(name) : 0;
+                        cfg.users = Users.Snapshot.of(appCtx());
+                        msg = "已保存「" + name + "」（" + Users.levelName(lv) + "）"
+                                + (kicked > 0 ? "，并让 " + kicked + " 个会话重新登录" : "");
+                        log("管理页：修改账号 " + name + " level=" + lv
+                                + (kicked > 0 ? "，踢下线 " + kicked : ""));
+                    }
+                }
+            } else if ("userdel".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                String guard = guardUserChange(req, name, Users.LEVEL_READ, true);
+                if (guard != null) {
+                    msg = guard;
+                } else {
+                    int kicked = sessionKillUser(name);
+                    Users.remove(appCtx(), name);
+                    cfg.users = Users.Snapshot.of(appCtx());
+                    msg = "已删除「" + name + "」"
+                            + (kicked > 0 ? "，并踢掉 " + kicked + " 个会话" : "");
+                    log("管理页：删除账号 " + name);
+                }
+            } else if ("userkick".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                int kicked = sessionKillUser(name);
+                msg = "已让「" + name + "」的 " + kicked + " 个会话重新登录";
+                log("管理页：踢下线 " + name + " ×" + kicked);
             } else {
                 msg = "未知操作";
             }
@@ -9498,7 +9787,90 @@ public class HttpServer {
             err = logged ? "当前账号是「" + Users.levelName(req.user.level) + "」，改设置需要管理员"
                     : "请先用管理员账号登录";
         }
+        // 注意：这里不能直接把 ok 当成 adminPage 的提示传下去 —— adminPage 需要
+        // isAdmin 已经算好，而 ok 里可能带 < 之类字符，统一进 esc()。
         sendHtml(out, 200, adminPage(req, err != null ? err : ok));
+    }
+
+    /**
+     * 网页端「账号管理」这一块。
+     *
+     * 每行一个账号：等级下拉 + 新密码输入 + 保存 / 踢下线 / 删除。
+     * 保存和删除用同一张表里的不同 form（删除必须是独立 form，否则在浏览器里
+     * 按回车会触发第一个 submit 按钮 —— 那正好是「保存」）。
+     */
+    private void appendUserAdmin(StringBuilder sb, Request req) {
+        List<Users.User> users = Users.list(appCtx());
+        int admins = 0;
+        for (Users.User u : users) if (u.level >= Users.LEVEL_ADMIN) admins++;
+        String me = req.user == null ? "" : req.user.name;
+
+        sb.append("<div class='adm-sect' style='margin-top:14px'>\n");
+        sb.append("<div class='adm-h'>账号管理</div>\n");
+        sb.append("<div class='adm-hint'>共 ").append(users.size()).append(" 个账号，其中管理员 ")
+          .append(admins).append(" 个。")
+          .append("只读＝能浏览/播放/下载；读写＝还能上传改名；管理员＝还能删除与改这里的设置。")
+          .append("改密码会把该账号已登录的设备全部踢下线。</div>\n");
+
+        if (users.isEmpty()) {
+            sb.append("<div class='adm-hint'>还没有任何账号 —— 这台机器现在是单机模式（匿名可读）。</div>\n");
+        }
+        for (Users.User u : users) {
+            int online = sessionCountOf(u.name);
+            boolean isMe = u.name.equals(me);
+            sb.append("<div class='adm-user'>\n");
+            sb.append("<div class='adm-user-top'><span class='adm-user-name'>").append(esc(u.name))
+              .append("</span>");
+            if (isMe) sb.append("<span class='adm-tag'>当前登录</span>");
+            sb.append("<span class='adm-tag'>").append(esc(Users.levelName(u.level))).append("</span>");
+            sb.append("<span class='adm-user-on'>").append(online > 0
+                    ? "在线 " + online + " 台" : "未在线").append("</span>");
+            if (!u.scopeText().isEmpty()) {
+                sb.append("<span class='adm-tag'>限目录</span>");
+            }
+            sb.append("</div>\n");
+
+            // 保存（改等级 / 改密码）
+            sb.append("<form method='post' action='/_admin' class='adm-form'>")
+              .append("<input type='hidden' name='action' value='userset'>")
+              .append("<input type='hidden' name='name' value='").append(esc(u.name)).append("'>")
+              .append(levelSelect("level", u.level))
+              .append("<input class='adm-inp' type='password' name='password' autocomplete='new-password' ")
+              .append("placeholder='新密码（留空不改）'>")
+              .append("<button class='adm-btn' type='submit'>保存</button>")
+              .append("</form>\n");
+
+            // 踢下线 / 删除 —— 各自独立 form
+            sb.append("<div class='adm-user-act'>");
+            if (online > 0) {
+                sb.append("<form method='post' action='/_admin' class='adm-form'>")
+                  .append("<input type='hidden' name='action' value='userkick'>")
+                  .append("<input type='hidden' name='name' value='").append(esc(u.name)).append("'>")
+                  .append("<button class='adm-btn' type='submit'>踢下线（")
+                  .append(online).append("）</button></form>");
+            }
+            if (!isMe) {
+                sb.append("<form method='post' action='/_admin' class='adm-form' ")
+                  .append("onsubmit='return confirm(&quot;删除账号 ")
+                  .append(esc(u.name)).append(" ？这个操作不能撤销。&quot;)'>")
+                  .append("<input type='hidden' name='action' value='userdel'>")
+                  .append("<input type='hidden' name='name' value='").append(esc(u.name)).append("'>")
+                  .append("<button class='adm-btn adm-btn-warn' type='submit'>删除</button></form>");
+            }
+            sb.append("</div>\n");
+            sb.append("</div>\n");
+        }
+
+        // 新建账号
+        sb.append("<form method='post' action='/_admin' class='adm-form adm-user-new'>")
+          .append("<input type='hidden' name='action' value='useradd'>")
+          .append("<input class='adm-inp' name='name' placeholder='新账号名' maxlength='32' required>")
+          .append(levelSelect("level", Users.LEVEL_READ))
+          .append("<input class='adm-inp' type='password' name='password' ")
+          .append("autocomplete='new-password' placeholder='密码' required>")
+          .append("<button class='adm-btn' type='submit'>创建账号</button>")
+          .append("</form>\n");
+        sb.append("</div>\n");
     }
 
     private android.content.Context appCtx() {
@@ -9568,6 +9940,63 @@ public class HttpServer {
             } else if ("unskip".equals(action)) {
                 AppPrefs.setSkipVersion(appCtx(), "");
                 sb.append("\"ok\":true,\"msg\":\"已清除跳过标记\"");
+            } else if ("useradd".equals(action)) {
+                // 客户端的「管理设置」也要能建号 / 改人 / 踢人 / 删人，
+                // 三条保护跟网页端是同一份 guardUserChange，不各写一遍。
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                String pw = form.containsKey("password") ? form.get("password") : "";
+                int lv = parseLevel(form.get("level"));
+                String err = Users.upsertEx(appCtx(), name, lv, pw);
+                if (err != null) {
+                    sb.append("\"ok\":false,\"error\":\"").append(jsonEsc("建号失败：" + err)).append('"');
+                } else {
+                    cfg.users = Users.Snapshot.of(appCtx());
+                    log("客户端管理：创建账号 " + name + " level=" + lv);
+                    sb.append("\"ok\":true,\"msg\":\"已创建「").append(jsonEsc(name))
+                      .append("」（").append(Users.levelName(lv)).append("）\"");
+                }
+            } else if ("userset".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                String pw = form.containsKey("password") ? form.get("password") : "";
+                int lv = parseLevel(form.get("level"));
+                String guard = guardUserChange(req, name, lv, false);
+                if (guard != null) {
+                    sb.append("\"ok\":false,\"error\":\"").append(jsonEsc(guard)).append('"');
+                } else {
+                    String err = Users.upsertEx(appCtx(), name, lv, pw);
+                    if (err != null) {
+                        sb.append("\"ok\":false,\"error\":\"").append(jsonEsc("修改失败：" + err)).append('"');
+                    } else {
+                        int kicked = pw != null && !pw.isEmpty() ? sessionKillUser(name) : 0;
+                        cfg.users = Users.Snapshot.of(appCtx());
+                        log("客户端管理：修改账号 " + name + " level=" + lv
+                                + (kicked > 0 ? "，踢下线 " + kicked : ""));
+                        sb.append("\"ok\":true,\"msg\":\"已保存「").append(jsonEsc(name))
+                          .append("」（").append(Users.levelName(lv)).append("）")
+                          .append(kicked > 0 ? "，并让 " + kicked + " 个会话重新登录" : "")
+                          .append('"');
+                    }
+                }
+            } else if ("userdel".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                String guard = guardUserChange(req, name, Users.LEVEL_READ, true);
+                if (guard != null) {
+                    sb.append("\"ok\":false,\"error\":\"").append(jsonEsc(guard)).append('"');
+                } else {
+                    int kicked = sessionKillUser(name);
+                    Users.remove(appCtx(), name);
+                    cfg.users = Users.Snapshot.of(appCtx());
+                    log("客户端管理：删除账号 " + name);
+                    sb.append("\"ok\":true,\"msg\":\"已删除「").append(jsonEsc(name))
+                      .append("」").append(kicked > 0 ? "，并踢掉 " + kicked + " 个会话" : "")
+                      .append('"');
+                }
+            } else if ("userkick".equals(action)) {
+                String name = form.containsKey("name") ? form.get("name").trim() : "";
+                int kicked = sessionKillUser(name);
+                log("客户端管理：踢下线 " + name + " ×" + kicked);
+                sb.append("\"ok\":true,\"msg\":\"已让「").append(jsonEsc(name))
+                  .append("」的 ").append(kicked).append(" 个会话重新登录\"");
             } else {
                 sb.append("\"ok\":false,\"error\":\"未知操作\"");
             }
@@ -9591,6 +10020,22 @@ public class HttpServer {
             sb.append(",\"bookDirs\":").append(jsonArr(cfg.bookDirs));
             sb.append(",\"photoDirs\":").append(jsonArr(cfg.photoDirs));
             sb.append(",\"dirs\":").append(dirChoicesJson(candidateDirs()));
+            // 账号清单只在管理员下给：只读账号没必要知道还有谁在用这台机器。
+            sb.append(",\"users\":[");
+            List<Users.User> ulist = Users.list(appCtx());
+            String me = req.user == null ? "" : req.user.name;
+            for (int i = 0; i < ulist.size(); i++) {
+                Users.User u = ulist.get(i);
+                if (i > 0) sb.append(',');
+                sb.append("{\"name\":\"").append(jsonEsc(u.name)).append('"')
+                  .append(",\"level\":").append(u.level)
+                  .append(",\"levelName\":\"").append(jsonEsc(Users.levelName(u.level))).append('"')
+                  .append(",\"online\":").append(sessionCountOf(u.name))
+                  .append(",\"me\":").append(u.name.equals(me))
+                  .append(",\"scoped\":").append(u.hasScope())
+                  .append('}');
+            }
+            sb.append(']');
         }
         // 版本与自动更新状态不放在 isAdmin 分支里：
         // 普通只读账号也该知道自己连的是什么版本的服务端。
@@ -10024,25 +10469,38 @@ public class HttpServer {
         long upLast = AppPrefs.lastUpdateCheck(appCtx());
         String upSkip = AppPrefs.skipVersion(appCtx());
         sb.append("<div class='adm-sect' style='margin-top:14px'>\n");
-        sb.append("<div class='adm-h'>自动更新</div>\n");
-        sb.append("<div class='adm-hint'>当前版本 ").append(esc(APP_VER))
-          .append("。打开后 App 回到首页时最多每 12 小时查一次 GitHub Release；")
+        sb.append("<div class='adm-h'>服务端自动更新</div>\n");
+        sb.append("<div class='adm-hint'><b>这一块只管 USBNAS 服务端")
+          .append("（com.littlesauce.usbnas，就是现在跑着 8080 端口、把 U 盘共享出去的那个 App）。</b>")
+          .append("打开后，服务端每次回到首页时最多每 12 小时去 GitHub Release 查一次新版；")
+          .append("查到只弹一个提示、把发布页交给浏览器，不会在后台偷偷下载安装 —— ")
+          .append("这台机器的屏幕可能盖在抽屉里或在当相框，弹系统安装器会当面插一杠。")
           .append("关着就一个请求都不发。</div>\n");
+        sb.append("<div class='adm-hint'>客户端（EXE / USBNASLink APK）有各自独立的自动更新，")
+          .append("开关在各自客户端的「管理设置」里；改这里不会影响它们，")
+          .append("也别指望这里能替它们升级。</div>\n");
+        // 版本号与状态做成一行「键值」，比夹在一段话里更容易被一眼扫到
+        sb.append("<div class='adm-kv'><span>当前版本</span><b>").append(esc(APP_VER)).append("</b>")
+          .append("<span>状态</span><b class='")
+          .append(upOn ? "adm-ok" : "adm-off").append("'>")
+          .append(upOn ? "已开启" : "已关闭").append("</b>")
+          .append("<span>检查间隔</span><b>最少 12 小时</b>")
+          .append("<span>上次检查</span><b>")
+          .append(upLast > 0L
+                  ? esc(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT)
+                          .format(new java.util.Date(upLast)))
+                  : "从未检查")
+          .append("</b></div>\n");
         sb.append("<form method='post' action='/_admin' class='adm-form'>")
           .append("<input type='hidden' name='action' value='update'>")
           .append("<input type='hidden' name='on' value='").append(upOn ? "0" : "1").append("'>")
           .append("<button class='adm-btn' type='submit'>")
-          .append(upOn ? "关闭自动更新" : "打开自动更新")
+          .append(upOn ? "关闭服务端自动更新" : "打开服务端自动更新")
           .append("</button>")
-          .append("<span class='adm-cnt'>").append(upOn ? "已开启" : "已关闭").append("</span>")
           .append("</form>\n");
-        if (upLast > 0L) {
-            sb.append("<div class='adm-hint'>上次检查：")
-              .append(esc(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT)
-                      .format(new java.util.Date(upLast))))
-              .append("</div>\n");
-        }
         if (upSkip != null && !upSkip.isEmpty()) {
+            sb.append("<div class='adm-hint' style='margin-top:10px'>已跳过版本：")
+              .append(esc(upSkip)).append("（不会再提示这个版本）</div>\n");
             sb.append("<form method='post' action='/_admin' class='adm-form'>")
               .append("<input type='hidden' name='action' value='unskip'>")
               .append("<button class='adm-btn' type='submit'>清除跳过（")
@@ -10053,6 +10511,10 @@ public class HttpServer {
 
         sb.append("<div class='adm-foot'>曲库、影视库与书库在修改后自动重扫，不用重启服务。</div>\n");
         sb.append("</div>\n");
+
+        // 账号管理放在最后：它是「配置谁有权改配置」，比目录设置更少用、也更危险，
+        // 摆在最下面是为了让手滑误点的概率降到最低。
+        appendUserAdmin(sb, req);
 
         // 树上的勾 → 文本框同步。裸 IIFE 要自己包 <script>（这台设备上有壳浏览器
         // 不认 <script src> 之外的注入，包起来最稳）。
@@ -10150,6 +10612,13 @@ public class HttpServer {
           .append("' autocomplete='username' autocapitalize='off' autofocus>\n");
         sb.append("<label>密码</label>\n");
         sb.append("<input name='p' type='password' autocomplete='current-password'>\n");
+        // 「记住该设备」：勾上 = cookie 存一年（浏览器关掉再开还在登录态）；
+        // 不勾 = 只存一天（默认行为，和上一版一致）。
+        //
+        // 做得克制一点：不勾是默认，且不说成"自动登录"—— 服务端 session 仍是
+        // 内存态，服务端一重启 cookie 就作废，勾了也只是"少敲一次密码"，
+        // 不该给用户"永久免登录"的错觉，所以文案写"记住该设备"而不是"忘记密码"。
+        sb.append("<label class='rem'><input type='checkbox' name='remember' value='1'> 记住该设备（这台浏览器保留登录一年）</label>\n");
         sb.append("<button type='submit'>登录</button>\n");
         sb.append("</form>\n");
         if (cfg.anonymousRead) {
@@ -10161,6 +10630,47 @@ public class HttpServer {
         sb.append("</div>\n</div>\n");
         htmlFoot(sb);
         return sb.toString();
+    }
+
+    /**
+     * 配色主题（三端共用）。
+     *
+     * GET  /_theme          → {"ok":true,"theme":"dark|light|ink","name":"夜间"}
+     * POST /_theme theme=…  → 同上，另带 "saved":true
+     *
+     * 为什么要有这个端点：客户端（exe / APK）要跟「同一台设备的网页端」保持一致，
+     * 而它们的配色既不能靠猜、也不能各存各的 —— 必须有一个共同的真源。真源选定在
+     * 服务端（AppPrefs 的 theme 键），因为它就是这台 NAS 自身，所有客户端都连它。
+     *
+     * 权限：读随便读（配色不是秘密）；写要求登录 —— 匿名能改会让「别人把你的
+     * 网页刷成日间」变成一个恶作剧入口。只读账号（LEVEL_READ）允许写：配色不涉及
+     * 任何数据，和「改站点名」不是一回事。
+     */
+    private void handleTheme(Request req, InputStream in, OutputStream out) throws IOException {
+        if ("POST".equalsIgnoreCase(req.method)) {
+            if (req.user == null && cfg.hasAccounts()) {
+                sendJson(out, "{\"ok\":false,\"error\":\"请先登录再改配色\"}");
+                return;
+            }
+            Map<String, String> form = readForm(in, req.contentLength());
+            String raw = form.get("theme");
+            if (raw == null && req.param("theme") != null) raw = req.param("theme");
+            if (raw == null || raw.trim().isEmpty()) {
+                sendJson(out, "{\"ok\":false,\"error\":\"缺少 theme 参数\"}");
+                return;
+            }
+            String mode = AppPrefs.normalizeTheme(raw);
+            prefTheme = mode;
+            AppPrefs.setTheme(appCtx(), mode);
+            sendJson(out, "{\"ok\":true,\"saved\":true,\"theme\":\"" + mode
+                    + "\",\"name\":\"" + AppPrefs.themeName(mode) + "\"}");
+            return;
+        }
+        // GET：把当前主题报回去，客户端进来先问一次
+        String mode = AppPrefs.normalizeTheme(prefTheme);
+        sendJson(out, "{\"ok\":true,\"theme\":\"" + mode
+                + "\",\"name\":\"" + AppPrefs.themeName(mode)
+                + "\",\"themes\":[\"dark\",\"light\",\"ink\"]}");
     }
 
     private void sendJson(OutputStream out, String json) throws IOException {

@@ -329,7 +329,7 @@ final class AdminPanel extends JPanel {
     }
 
     private void warn(String msg) {
-        JOptionPane.showMessageDialog(this, msg, "管理设置", JOptionPane.WARNING_MESSAGE);
+        Theme.message(this, "管理设置", msg);
     }
 
     // ---------------------------------------------------------------- 小工具

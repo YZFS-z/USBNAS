@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity() {
          * （HttpServer 里另有 APP_VER 常量），两边必须一致，所以发版时两处一起改，
          * 并在 RELEASING.md 里写清楚。只改 gradle 的 versionName 不会影响这里。
          */
-        const val APP_VER = "1.0.4"
+        const val APP_VER = "1.0.5"
     }
 
     // 两套布局的控件并不完全一致（竖屏首页在 homeScroll 里，横屏分两列各自滚），
@@ -281,6 +281,8 @@ class MainActivity : AppCompatActivity() {
         mainHandler.postDelayed(idleCheck, 20_000L)
         mainHandler.removeCallbacks(shiftTick)
         mainHandler.postDelayed(shiftTick, SHIFT_MS)
+        // 从后台/锁屏回来，系统会把状态栏放回去，这里补收一次
+        hideSystemBars()
     }
 
     /** 首页那个「自动更新」按钮上的字：显示开关状态 + 上次检查时间 */
@@ -885,12 +887,31 @@ class MainActivity : AppCompatActivity() {
         window.setDecorFitsSystemWindows(false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
         if (Build.VERSION.SDK_INT >= 29) {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
+        // 这台机器常年横屏插在底座上当相框，挖孔区（顶部 104px）必须让内容画进去，
+        // 否则 setDecorFitsSystemWindows(false) 之后顶部照样留一条黑边。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                        android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         installSafeAreaPadding()
         installBarsHider()
+    }
+
+    /**
+     * 系统栏只靠 decor 的 visibility 回调抓不住 —— 下拉通知栏、解锁、从别的
+     * Activity 回来，状态栏都会自己滑回来。窗口焦点一拿到就再收一次，这是
+     * 唯一稳定的钩子。
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()
     }
 
     /**

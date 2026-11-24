@@ -62,6 +62,34 @@ class Prefs(ctx: Context) {
             sp.edit().putLong(KEY_LAST_UPDATE_CHECK, v).apply()
         }
 
+    // ------------------------------------------------------------ 登录与配色
+
+    /**
+     * 「记住该设备」复选框的勾选状态。
+     *
+     * 它只决定登录表单里要不要带 remember=1（服务端据此把 Cookie 的 Max-Age
+     * 从一天放成一年）。勾选状态本身也存下来，下次登录框默认就是勾上的 ——
+     * 用户勾过一次通常不想再勾。
+     */
+    var remember: Boolean
+        get() = sp.getBoolean(KEY_REMEMBER, false)
+        set(v) {
+            sp.edit().putBoolean(KEY_REMEMBER, v).apply()
+        }
+
+    /**
+     * 上次从服务端拿到的主题（`dark` / `light` / `ink`）。
+     *
+     * 为什么要缓存：主题的真源在服务端，但网络断掉或服务端还没起时，
+     * 界面不该因为「问不到主题」而闪回默认色。启动时先用这个离线值上色，
+     * 拿到服务端的答案之后再纠正。
+     */
+    var theme: String
+        get() = sp.getString(KEY_THEME, "dark") ?: "dark"
+        set(v) {
+            sp.edit().putString(KEY_THEME, v).apply()
+        }
+
     private companion object {
         const val KEY_URL = "last_url"
         const val KEY_NAME = "last_name"
@@ -70,5 +98,7 @@ class Prefs(ctx: Context) {
         const val KEY_AUTO_UPDATE = "auto_update"
         const val KEY_SKIP_VERSION = "skip_version"
         const val KEY_LAST_UPDATE_CHECK = "last_update_check"
+        const val KEY_REMEMBER = "remember_device"
+        const val KEY_THEME = "theme"
     }
 }

@@ -10,7 +10,6 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
@@ -120,14 +119,12 @@ final class UpdUI {
             prefs().markChecked();
             SwingUtilities.invokeLater(() -> {
                 if (!info.ok) {
-                    JOptionPane.showMessageDialog(parent, "检查失败：" + info.error,
-                            "检查更新", JOptionPane.WARNING_MESSAGE);
+                    Theme.message(parent, "检查更新", "检查失败：" + info.error);
                     return;
                 }
                 if (!Update.newer(info, currentVersion())) {
-                    JOptionPane.showMessageDialog(parent,
-                            "已经是最新版本（" + currentVersion() + "）",
-                            "检查更新", JOptionPane.INFORMATION_MESSAGE);
+                    Theme.message(parent, "检查更新",
+                            "已经是最新版本（" + currentVersion() + "）");
                     return;
                 }
                 showDialog(parent, info);
@@ -239,10 +236,11 @@ final class UpdUI {
         JProgressBar bar = new JProgressBar(0, 1000);
         bar.setStringPainted(true);
         bar.setString("连接中…");
-        bar.setForeground(Theme.BRAND);
-        bar.setBackground(Theme.BG_DEEP);
         bar.setBorderPainted(false);
         bar.setPreferredSize(new Dimension(420, 26));
+        Theme.progress(bar);
+        // 下载对话框铺在 BG_DEEP 上，进度条的槽也用 BG_DEEP 才看不出接缝
+        bar.setBackground(Theme.BG_DEEP);
         JPanel pad = new JPanel(new BorderLayout());
         pad.setBackground(Theme.BG_DEEP);
         pad.setBorder(BorderFactory.createEmptyBorder(18, 20, 18, 20));
@@ -288,8 +286,7 @@ final class UpdUI {
             SwingUtilities.invokeLater(() -> {
                 dlg.dispose();
                 if (ferr != null) {
-                    JOptionPane.showMessageDialog(parent, "下载失败：" + ferr,
-                            "检查更新", JOptionPane.ERROR_MESSAGE);
+                    Theme.message(parent, "检查更新", "下载失败：" + ferr);
                     openInBrowser(info.pageUrl);
                     return;
                 }
@@ -304,21 +301,20 @@ final class UpdUI {
     /** 问要不要当场重启；确认则写脚本并退出本进程 */
     private static void askRestart(java.awt.Component parent, Update.Info info,
                                    File installDir, File stage, File zip) {
-        int r = JOptionPane.showConfirmDialog(parent,
+        boolean yes = Theme.confirm(parent, "准备就绪",
                 "新版本 " + info.version + " 已下载好。\n"
                         + "现在重启并替换程序文件吗？\n\n"
                         + "程序会关闭并重新打开，设置、歌单、缓存都不受影响。\n"
-                        + "（如果点「否」，下次启动时会再问你一次）",
-                "准备就绪", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) {
+                        + "（如果点「稍后」，下次启动时会再问你一次）",
+                "现在重启", "稍后", false);
+        if (yes) {
             try {
                 launchSwap(installDir, stage, zip);
                 System.exit(0);
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(parent,
+                Theme.message(parent, "检查更新",
                         "替换脚本写不出去：" + ex.getMessage() + "\n可以手动解压 "
-                                + stage.getAbsolutePath() + " 覆盖安装目录。",
-                        "检查更新", JOptionPane.ERROR_MESSAGE);
+                                + stage.getAbsolutePath() + " 覆盖安装目录。");
             }
         }
     }
@@ -480,7 +476,7 @@ final class UpdUI {
 
     /** 版本号常量：与 build.ps1 里写进 jar 清单的 Implementation-Version 保持一致 */
     static final class Build {
-        static final String VERSION = "1.0.4";
+        static final String VERSION = "1.0.5";
 
         private Build() {}
     }
