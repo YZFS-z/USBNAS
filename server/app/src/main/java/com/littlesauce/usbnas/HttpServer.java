@@ -562,6 +562,18 @@ public class HttpServer {
      */
     private volatile String prefTheme = "dark";
 
+    /**
+     * 分享口令表：分享码 → 被分享的绝对路径。
+     *
+     * <p>为什么是内存表而不是磁盘文件：分享本来就是「临时开一条缝」这件事，
+     * 服务端重启一次缝就该自己合上。写成磁盘反而会出现「半年后翻出个链接
+     * 还能下走整个目录」的情况。要做长期分享，重新点一次就行。
+     *
+     * <p>值里只存路径，不存权限等级 —— 分享能不能用完全靠这张表命中，
+     * 命中即放行该路径，未命中一律照旧走 {@link #needLoginForFile}。
+     */
+    private final Map<String, String> shares = new java.util.concurrent.ConcurrentHashMap<>();
+
     private ServerSocket serverSocket;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private ExecutorService pool;
@@ -718,6 +730,14 @@ public class HttpServer {
             }
             req.user = cfg.auth(req);
 
+            // ---- 分享码 ----
+            // 必须在 authorized() 之前剥掉 /@CODE 前缀：解析器拿到的 path 是
+            // /@AB7K3/browse/mnt/... ，而 authorized() 是按 path 前缀做白名单的
+            // （/_music、/_status 这些），带着码会一条都对不上，于是一律 401。
+            // takeShareCode() 会把 req.path 改写成 /browse/mnt/...，并把码记到
+            // req.shareCode，供 needLoginForFile() 判定「这一条分享覆盖不覆盖该文件」。
+            takeShareCode(req);
+
             // ---- 认证 ----
             if (!authorized(req)) {
                 sendUnauthorized(out, req);
@@ -758,7 +778,9 @@ public class HttpServer {
                 || p.equals("/favicon.ico") || p.equals("/_del")
                 || p.equals("/_delmulti") || p.equals("/lyrics/save")
                 || p.equals("/_rename") || p.equals("/_move")
-                || p.equals("/_dirlist"))) {
+                || p.equals("/_dirlist")
+                || p.equals("/_share/new") || p.equals("/_share/drop")
+                || p.equals("/_share/list"))) {
             return true;
         }
         // 曲库清单与 /_dirlist 同性质：只吐文件路径，不吐内容。
@@ -840,6 +862,9 @@ public class HttpServer {
         if (f == null || !f.isFile()) return false;
         if (!cfg.hasAccounts()) return false;
         if (req != null && req.user != null) return false;
+        // 聊胜于无的一刀：连分享码都不带的人，别往下走扩展名判断了。
+        // 真正的放行判定在 shareCovers()，它比对的是「命中的那条分享覆盖不覆盖 f」。
+        if (req != null && shareCovers(req, f)) return false;
         if (!cfg.anonymousRead) return true; // 关掉了匿名读：所有内容都要登录
         String name = f.getName();
         int dot = name.lastIndexOf('.');
@@ -1307,6 +1332,23 @@ public class HttpServer {
         // 移动对话框要选目标目录，这个接口回目录列表（只回子目录，不回文件）
         if (path.equals("/_dirlist")) {
             handleDirList(req, out);
+            return;
+        }
+
+        // 文件分享：生成/撤销/列出短链。
+        // 三个都在 authorized() 里放行到 handler，真正的权限判定在这里面
+        // （new 要 canWrite，list 要管理员）—— 这样匿名能拿到一句人话，
+        // 而不是笼统的 401。
+        if (path.equals("/_share/new") && "POST".equals(req.method)) {
+            handleShareNew(req, in, out);
+            return;
+        }
+        if (path.equals("/_share/drop") && "POST".equals(req.method)) {
+            handleShareDrop(req, in, out);
+            return;
+        }
+        if (path.equals("/_share/list")) {
+            handleShareList(req, out);
             return;
         }
 
@@ -5658,6 +5700,217 @@ public class HttpServer {
         return false;
     }
 
+    // ==================== 文件分享（免登录短链） ====================
+    //
+    // 场景：把某目录下的某个文件，用一条链接甩给局域网里的同事/家人，
+    // 他们不登录、不装客户端，浏览器打开就能预览/播放/下载。
+    //
+    // 设计取舍：
+    // 1) 分享码是 5 位 base32（去掉了容易看错的 0/O/1/I/l），29^5 ≈ 2×10^7。
+    //    够短，能口述；也不至于一眼被猜出来。
+    // 2) 码放在路径「最前面」：/@AB7K3/browse/... —— 这样整页里的相对链接
+    //    都天然带着码，不用在每个 href 后面拼参数。
+    // 3) 一条分享覆盖「目标及其子树」。分享一个目录 = 整个子树可看；
+    //    分享一个文件 = 只有那一个文件可看。用前缀比对（带分隔符）实现，
+    //    不会出现 /a/b 命中 /a/bc 这种误伤。
+    // 4) 表在内存里，重启即失效 —— 见字段 shares 的注释。
+    // 5) 不做「访问计数/过期时间/密码」，那些是长期分发的需求；
+    //    这里要的是「临时开一条缝，用完刷新一次服务端就没了」。
+
+    /** 分享码字符表：去掉 0/O/1/I/L 这些在链接里容易看错的 */
+    private static final String SHARE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    private static final int SHARE_LEN = 5;
+    /** 分享给自己人看的路径段前缀，出现在 URL 最前面 */
+    private static final String SHARE_PREFIX = "/@";
+
+    /**
+     * 生成一个没被占用的分享码。
+     * 撞了就重摇 —— 5 位空间够大，实际最多循环一两次。
+     */
+    private String newShareCode() {
+        java.security.SecureRandom rnd = new java.security.SecureRandom();
+        for (int tries = 0; tries < 64; tries++) {
+            StringBuilder sb = new StringBuilder(SHARE_LEN);
+            for (int i = 0; i < SHARE_LEN; i++) {
+                sb.append(SHARE_ALPHABET.charAt(rnd.nextInt(SHARE_ALPHABET.length())));
+            }
+            String code = sb.toString();
+            if (!shares.containsKey(code)) return code;
+        }
+        // 极端情况：拿时间戳兜底，保证一定有返回
+        return Long.toString(System.nanoTime(), 36).toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * 从请求路径里剥出分享码。
+     *
+     * <p>{@code /@AB7K3/browse/mnt/...} → {@code code="AB7K3"}，并把
+     * {@code req.path} 改写成 {@code /browse/mnt/...}。
+     * 没带码就原样返回 null，路径不动。
+     */
+    private String takeShareCode(Request req) {
+        String p = req.path;
+        if (p == null || !p.startsWith(SHARE_PREFIX)) return null;
+        int slash = p.indexOf('/', SHARE_PREFIX.length());
+        // /@AB7K3 也要能用（这时候等价于 /@AB7K3/）
+        String code = slash < 0 ? p.substring(SHARE_PREFIX.length())
+                : p.substring(SHARE_PREFIX.length(), slash);
+        if (code.isEmpty()) return null;
+        code = code.toUpperCase(Locale.ROOT);
+        String rest = slash < 0 ? "/" : p.substring(slash);
+        req.shareCode = code;
+        req.path = rest;
+        req.headers.put("x-usbnas-share", code);
+        return code;
+    }
+
+    /**
+     * 当前请求带的分享码，能不能覆盖到 f。
+     *
+     * <p>覆盖 = 「正是被分享的那个东西」或者「在它下面」。比较用 canonical
+     * 路径，末尾补分隔符再 startsWith，避免 /a/b 命中 /a/bc。
+     */
+    private boolean shareCovers(Request req, File f) {
+        if (req == null || f == null) return false;
+        String code = req.shareCode;
+        if (code == null) return false;
+        String target = shares.get(code);
+        if (target == null) return false;
+        String tc = target.endsWith(File.separator) ? target : target + File.separator;
+        String fc = canonical(f);
+        return fc.equals(target) || fc.startsWith(tc);
+    }
+
+    /** 当前请求的分享码对应的路径，没有就 null */
+    private String shareTarget(Request req) {
+        if (req == null || req.shareCode == null) return null;
+        return shares.get(req.shareCode);
+    }
+
+    /**
+     * 把一条站内路径包装成分享链接里的形式。
+     * 没带分享码就原样返回 —— 登录用户看页面时不该看到 /@XXXX/ 这种东西。
+     */
+    private String withShare(Request req, String absPath) {
+        if (req == null || req.shareCode == null) return absPath;
+        if (absPath == null) return "/";
+        return SHARE_PREFIX + req.shareCode
+                + (absPath.startsWith("/") ? absPath : "/" + absPath);
+    }
+
+    /**
+     * 创建分享。只接受 POST，权限按 canWrite 判 ——
+     * 分享一个目录等于把整个子树对外开放，这比「能删一个文件」影响更大，
+     * 所以只读账号不给发；管理员与有写权限的受限账号可以。
+     */
+    private void handleShareNew(Request req, InputStream in, OutputStream out) throws IOException {
+        if (req.user == null) {
+            sendJson(out, "{\"ok\":false,\"error\":\"先登录再分享\"}");
+            return;
+        }
+        Map<String, String> form = readForm(in, req.contentLength());
+        String p = form.get("p");
+        if (p == null || p.isEmpty()) {
+            sendJson(out, "{\"ok\":false,\"error\":\"没指定要分享的路径\"}");
+            return;
+        }
+        File f = resolve(p);
+        if (f == null || !f.exists()) {
+            sendJson(out, "{\"ok\":false,\"error\":\"找不到: " + jsonEsc(p) + "\"}");
+            return;
+        }
+        if (!Users.inScope(req.user, f)) {
+            sendJson(out, "{\"ok\":false,\"error\":\"这个路径不在你的目录范围内\"}");
+            return;
+        }
+        // 共享根本身不给分享：那等于把整块盘匿名挂出去。
+        if (isRootItself(f)) {
+            sendJson(out, "{\"ok\":false,\"error\":\"不能分享整块存储，请进到具体目录再分享\"}");
+            return;
+        }
+        if (!canWrite(req, f.isDirectory() ? f : f.getParentFile())) {
+            sendJson(out, "{\"ok\":false,\"error\":\"没有这个位置的写权限\"}");
+            return;
+        }
+        String code = newShareCode();
+        shares.put(code, canonical(f));
+        String rel = withShare(req, f.isDirectory() ? "/browse" + f.getAbsolutePath()
+                : "/view?f=" + encode(f.getAbsolutePath()));
+        String link = baseUrlFor(req) + SHARE_PREFIX + code
+                + (f.isDirectory() ? "/browse" + f.getAbsolutePath()
+                : "/view?f=" + encode(f.getAbsolutePath()));
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"ok\":true,\"code\":\"").append(jsonEsc(code)).append('"');
+        sb.append(",\"path\":\"").append(jsonEsc(f.getAbsolutePath())).append('"');
+        sb.append(",\"dir\":").append(f.isDirectory());
+        sb.append(",\"url\":\"").append(jsonEsc(link)).append('"');
+        sb.append('}');
+        sendJson(out, sb.toString());
+    }
+
+    /** 撤销单条分享（刷一次链接就作废） */
+    private void handleShareDrop(Request req, InputStream in, OutputStream out) throws IOException {
+        if (req.user == null) {
+            sendJson(out, "{\"ok\":false,\"error\":\"先登录\"}");
+            return;
+        }
+        Map<String, String> form = readForm(in, req.contentLength());
+        String code = form.get("code");
+        if (code == null || code.isEmpty()) {
+            sendJson(out, "{\"ok\":false,\"error\":\"没指定分享码\"}");
+            return;
+        }
+        boolean removed = shares.remove(code.toUpperCase(Locale.ROOT)) != null;
+        sendJson(out, "{\"ok\":true,\"removed\":" + removed + "}");
+    }
+
+    /** 列出当前所有分享（管理页用，只给管理员） */
+    private void handleShareList(Request req, OutputStream out) throws IOException {
+        if (req.user == null || req.user.level < Users.LEVEL_ADMIN) {
+            sendJson(out, "{\"ok\":false,\"error\":\"需要管理员\"}");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"ok\":true,\"shares\":[");
+        boolean first = true;
+        for (Map.Entry<String, String> e : shares.entrySet()) {
+            String path = e.getValue();
+            File f = new File(path);
+            if (!f.exists()) continue; // 文件被人删了：干脆别列出来
+            if (!first) sb.append(',');
+            first = false;
+            sb.append("{\"code\":\"").append(jsonEsc(e.getKey())).append('"');
+            sb.append(",\"path\":\"").append(jsonEsc(path)).append('"');
+            sb.append(",\"dir\":").append(f.isDirectory());
+            sb.append(",\"name\":\"").append(jsonEsc(f.getName())).append('"');
+            sb.append(",\"url\":\"").append(jsonEsc(baseUrlFor(req) + SHARE_PREFIX
+                    + e.getKey() + (f.isDirectory()
+                    ? "/browse" + path : "/view?f=" + encode(path)))).append('"');
+            sb.append('}');
+        }
+        sb.append("]}");
+        sendJson(out, sb.toString());
+    }
+
+    /**
+     * 请求方看到的本站根地址（形如 http://192.168.1.5:8080）。
+     * 分享链接要能被别人直接粘到浏览器里，所以必须带主机和端口。
+     */
+    private String baseUrlFor(Request req) {
+        String host = req.headers.get("host");
+        if (host != null && !host.isEmpty()) return "http://" + host;
+        // 没有 Host 头（HTTP/1.0 或手工 telnet）就退回首个可用地址
+        try {
+            // Kotlin 的 object 从 Java 看是「类 + INSTANCE 静态字段」，
+            // 所以 NetUtils.bestIp 不能直接当静态方法调。
+            String ip = NetUtils.INSTANCE.bestIp(appCtx());
+            if (ip != null && !ip.isEmpty()) return "http://" + ip + ":" + cfg.port;
+        } catch (Throwable ignored) {
+            // 拿不到就瞎拼一个，总比返回相对路径强
+        }
+        return "http://127.0.0.1:" + cfg.port;
+    }
+
     private void redirect303(OutputStream out, String location) throws IOException {
         out.write(("HTTP/1.1 303 See Other\r\n"
                 + "Location: " + location + "\r\n"
@@ -6010,6 +6263,20 @@ public class HttpServer {
         return rowActButton("mv", svgIcon("move", "svgi-act"), "移动到…", absPath, back);
     }
 
+    /**
+     * 分享按钮。
+     *
+     * <p>点它不跳页，由 SHARE_JS 弹一个「链接 + 复制」的小面板 —— 复制要用
+     * `navigator.clipboard`，而它在 http（非 https）下大多数浏览器直接不给用，
+     * 所以面板里同时给一个可长按选中的 `<input readonly>`，两条路都留着。
+     *
+     * <p>和 rename/move 一样是纯 button + data-*：整页列表被 &lt;form id='batch'&gt;
+     * 包着，内层 form 会被浏览器丢掉标签。
+     */
+    private String shareButton(String absPath, String back) {
+        return rowActButton("sh", svgIcon("share", "svgi-act"), "分享（免登录短链）", absPath, back);
+    }
+
     private String rowActButton(String kind, String glyph, String title,
                                 String absPath, String back) {
         String pv = esc(absPath).replace("\"", "&quot;");
@@ -6280,6 +6547,121 @@ public class HttpServer {
             + "</script>\n";
 
     /**
+     * 分享按钮的行为：点一下 POST 到 /_share/new，拿回一条免登录短链，
+     * 在页面里弹一个小面板显示链接 + 复制 + 撤销。
+     *
+     * ## 为什么不直接用 window.prompt
+     *
+     * prompt 只能显示一段文本，没法给「复制」按钮，也没法让用户看清
+     * 「这条链接谁能打开」——而分享最怕的就是自己以为只给了某个人。
+     * 所以自绘一个小面板，把「链接」「说明」「撤销」放在一起。
+     *
+     * ## 复制怎么做
+     *
+     * `navigator.clipboard` 在 http:// 下（非安全上下文）Chrome/Via 一律拒绝，
+     * 而这台 NAS 就是 http。所以走老路 `document.execCommand('copy')`，
+     * 它在 http 下仍然可用；两条都失败时链接本身是个只读 input，
+     * 用户可以长按选中手动复制。
+     *
+     * ## 撤销
+     *
+     * 面板里带「撤销这条」，POST /_share/drop。撤销只影响这一条链接，
+     * 别人的分享和登录态都不动。服务端重启也会让全部链接失效（内存表）。
+     */
+    private static final String SHARE_JS =
+            "<script>\n"
+            + "(function(){\n"
+            + "  var BASE=window.USBNAS_BASE||location.origin;\n"
+            + "  function el(tag,cls,txt){\n"
+            + "    var e=document.createElement(tag);\n"
+            + "    if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e;\n"
+            + "  }\n"
+            + "  function post(path,pairs,cb){\n"
+            + "    var x=new XMLHttpRequest();\n"
+            + "    x.open('POST',path,true);\n"
+            + "    x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');\n"
+            + "    x.onreadystatechange=function(){\n"
+            + "      if(x.readyState!==4)return;\n"
+            + "      var r=null; try{ r=JSON.parse(x.responseText); }catch(e){}\n"
+            + "      cb(r||{ok:false,error:'服务端没回话'});\n"
+            + "    };\n"
+            + "    var body=[];\n"
+            + "    for(var i=0;i<pairs.length;i++){\n"
+            + "      body.push(encodeURIComponent(pairs[i][0])+'='+encodeURIComponent(pairs[i][1]));\n"
+            + "    }\n"
+            + "    x.send(body.join('&'));\n"
+            + "  }\n"
+            + "  function copy(text){\n"
+            + "    var ok=false;\n"
+            + "    try{\n"
+            + "      var ta=document.createElement('textarea');\n"
+            + "      ta.value=text; ta.style.position='fixed'; ta.style.left='-9999px';\n"
+            + "      document.body.appendChild(ta); ta.select();\n"
+            + "      ok=document.execCommand('copy');\n"
+            + "      document.body.removeChild(ta);\n"
+            + "    }catch(e){ ok=false; }\n"
+            + "    if(!ok && navigator.clipboard){\n"
+            + "      try{ navigator.clipboard.writeText(text); ok=true; }catch(e){}\n"
+            + "    }\n"
+            + "    return ok;\n"
+            + "  }\n"
+            + "  function panel(url,code){\n"
+            + "    var old=document.getElementById('shpanel');\n"
+            + "    if(old) old.parentNode.removeChild(old);\n"
+            + "    var w=el('div','shpanel'); w.id='shpanel';\n"
+            + "    w.appendChild(el('div','shtitle','免登录链接'));\n"
+            + "    w.appendChild(el('div','shnote','任何人在同一局域网里打开这条链接，都能直接看，不用登录。'));\n"
+            + "    var inp=el('input','shurl'); inp.type='text'; inp.readOnly=true; inp.value=url;\n"
+            + "    inp.onfocus=function(){ inp.select(); };\n"
+            + "    w.appendChild(inp);\n"
+            + "    var row=el('div','shrow');\n"
+            + "    var bcopy=el('button','primary','复制链接');\n"
+            + "    bcopy.type='button';\n"
+            + "    bcopy.onclick=function(){\n"
+            + "      if(copy(url)){ bcopy.textContent='已复制'; }\n"
+            + "      else{ inp.focus(); inp.select(); bcopy.textContent='请手动复制'; }\n"
+            + "      setTimeout(function(){ bcopy.textContent='复制链接'; },1600);\n"
+            + "    };\n"
+            + "    row.appendChild(bcopy);\n"
+            + "    var bopen=el('a','ghost','打开看看');\n"
+            + "    bopen.href=url; bopen.target='_blank'; bopen.rel='noopener';\n"
+            + "    row.appendChild(bopen);\n"
+            + "    var bdrop=el('button','danger','撤销这条');\n"
+            + "    bdrop.type='button';\n"
+            + "    bdrop.onclick=function(){\n"
+            + "      post('/_share/drop',[['code',code]],function(r){\n"
+            + "        w.parentNode&&w.parentNode.removeChild(w);\n"
+            + "      });\n"
+            + "    };\n"
+            + "    row.appendChild(bdrop);\n"
+            + "    w.appendChild(row);\n"
+            + "    var bclose=el('button','ghost','关闭');\n"
+            + "    bclose.type='button';\n"
+            + "    bclose.onclick=function(){ w.parentNode&&w.parentNode.removeChild(w); };\n"
+            + "    w.appendChild(bclose);\n"
+            + "    document.body.appendChild(w);\n"
+            + "    inp.focus(); inp.select();\n"
+            + "  }\n"
+            + "  document.addEventListener('click',function(ev){\n"
+            + "    var t=ev.target;\n"
+            + "    while(t && t!==document.body){\n"
+            + "      if(t.classList && t.classList.contains('rowact') && t.getAttribute('data-k')==='sh'){\n"
+            + "        ev.preventDefault(); ev.stopPropagation();\n"
+            + "        var p=t.getAttribute('data-p');\n"
+            + "        if(!p) return;\n"
+            + "        post('/_share/new',[['p',p]],function(r){\n"
+            + "          if(r && r.ok && r.url){ panel(r.url, r.code); }\n"
+            + "          else{ alert((r&&r.error)||'分享失败'); }\n"
+            + "        });\n"
+            + "        return;\n"
+            + "      }\n"
+            + "      t=t.parentNode;\n"
+            + "    }\n"
+            + "  },true);\n"
+            + "})();\n"
+            + "</script>\n";
+
+    /**
      * 单个删除的提交逻辑。
      *
      * 动态建一个游离表单（不挂在 batch 里，避免上面说的嵌套问题），
@@ -6503,6 +6885,14 @@ public class HttpServer {
                     sb.append(renameButton(full, backTo(dir)));
                     sb.append(moveButton(full, backTo(dir)));
                 }
+                // 分享按钮的可见性与 rename/move 一致但不完全一样：
+                // 分享不改文件、不改目录结构，只对外开一条临时读链 ——
+                // 所以「有写权限」和「是自己范围内的」之外，共享根也允许分享
+                // （分享一整块盘等价于「把这块盘挂在局域网里」，是个合理诉求）。
+                // 真正的拒绝在 handleShareNew 里，这里只控制显不显示。
+                if (writeAllowed && Users.inScope(req.user, f)) {
+                    sb.append(shareButton(full, backTo(dir)));
+                }
                 if (delAllowed && Users.inScope(req.user, f)) {
                     sb.append(delButton(full, backTo(dir)));
                 }
@@ -6512,7 +6902,14 @@ public class HttpServer {
                 sb.append("<span class='acts'>")
                         .append(renameButton(full, backTo(dir)))
                         .append(moveButton(full, backTo(dir)))
+                        .append(shareButton(full, backTo(dir)))
                         .append(delAllowed ? delButton(full, backTo(dir)) : "")
+                        .append("</span>");
+            } else if (writeAllowed && Users.inScope(req.user, f)) {
+                // 共享根本身：不能改名/搬走/删，但「整块盘给局域网临时开个口」
+                // 恰恰是最常见的分享诉求，所以给它留着。
+                sb.append("<span class='acts'>")
+                        .append(shareButton(full, backTo(dir)))
                         .append("</span>");
             } else if (delAllowed && Users.inScope(req.user, f)) {
                 // 目录也能删，但要求目录是空的，否则 confirm 会提示先清空
@@ -6567,6 +6964,13 @@ public class HttpServer {
             sb.append(RNMOVE_JS);
         }
         if (writeAllowed) sb.append("<script>\n").append(UPLOAD_JS).append("</script>\n");
+        // 分享按钮跟着写权限出现（可见性与 rename/move 同源），
+        // 页面里同时塞进当前站点根地址，好让 SHARE_JS 直接把绝对链接摆出来。
+        if (writeAllowed) {
+            sb.append("<script>window.USBNAS_BASE=")
+              .append(jsStr(baseUrlFor(req))).append(";</script>\n");
+            sb.append("<script>\n").append(SHARE_JS).append("</script>\n");
+        }
         htmlFoot(sb);
         return sb.toString();
     }
@@ -7696,6 +8100,15 @@ public class HttpServer {
                     + "body.light .lclock b{color:#1b1f26}"
                     + "body.light .lclock i{color:#6e7681}"
                     + "body.light .lf{color:#6e7681}"
+                    // ---- 分享面板（日间） ----
+                    + "body.light .shpanel{background:#ffffff;border-color:#dbe0e7;"
+                    + "box-shadow:0 18px 46px rgba(15,23,42,.22)}"
+                    + "body.light .shtitle{color:#1b1f26}"
+                    + "body.light .shnote{color:#6e7681}"
+                    + "body.light .shurl{background:#f6f8fa;border-color:#d5dbe3;color:#1b1f26}"
+                    + "body.light .shpanel .ghost{background:#f6f8fa;border-color:#d5dbe3;color:#2f80ed}"
+                    + "body.light .shpanel .ghost:hover{background:#e8f0fd}"
+                    + "body.light .shpanel .danger{background:#fdecec;border-color:#f2c2c2;color:#c0392b}"
                     + "body.light ::-webkit-scrollbar-thumb{background:#d3dae3}";
 
     /**
@@ -7827,6 +8240,19 @@ public class HttpServer {
                     + "body.ink .lclock b{color:#232323}"
                     + "body.ink .lclock i{color:#6e6e6e}"
                     + "body.ink .lf{color:#6e6e6e}"
+                    // ---- 分享面板（水墨屏） ----
+                    // 弹层不能靠阴影分层（墨水屏上阴影是一团脏灰），
+                    // 改成实线描边 + 不透明白底，靠框把人眼拉过来。
+                    + "body.ink .shpanel{background:#f2f2f2;border-color:#b8b8b8;"
+                    + "box-shadow:none}"
+                    + "body.ink .shtitle{color:#232323}"
+                    + "body.ink .shnote{color:#6e6e6e}"
+                    + "body.ink .shurl{background:#e8e8e8;border-color:#b8b8b8;color:#232323}"
+                    + "body.ink .shpanel .ghost{background:#e8e8e8;border-color:#b8b8b8;color:#3a3a3a}"
+                    + "body.ink .shpanel .ghost:hover{background:#dedede}"
+                    + "body.ink .shpanel .primary{background:#5e5e5e;border-color:#5e5e5e;"
+                    + "color:#ffffff}"
+                    + "body.ink .shpanel .danger{background:#e8e8e8;border-color:#b8b8b8;color:#3a3a3a}"
                     + "body.ink ::-webkit-scrollbar-thumb{background:#c6c6c6}";
 
     private static final String CSS =
@@ -8052,6 +8478,32 @@ public class HttpServer {
                     + ".batchbar .danger:hover:not(:disabled){background:#d64a3b}"
                     + ".batchbar .danger:disabled{background:#2a1a1e;color:#7a5057;"
                     + "cursor:not-allowed}"
+                    // ---- 分享面板（夜间） ----
+                    // 固定居中而不是贴着按钮弹：分享链接通常要念给别人听/复制到
+                    // 别处，位置稳定比「贴手」更重要，也省掉「面板超出视口右边被切掉」
+                    // 这种小屏常见问题。
+                    + ".shpanel{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);"
+                    + "z-index:60;width:min(440px,calc(100vw - 32px));padding:18px 18px 14px;"
+                    + "background:#171b22;border:1px solid #2a3340;border-radius:14px;"
+                    + "box-shadow:0 18px 46px rgba(0,0,0,.55)}"
+                    + ".shtitle{font-size:15px;font-weight:700;color:#e6e9ef;margin-bottom:6px}"
+                    + ".shnote{font-size:12px;color:#7d8590;line-height:1.6;margin-bottom:12px}"
+                    + ".shurl{width:100%;padding:10px 12px;border-radius:9px;"
+                    + "background:#11161d;border:1px solid #2a3340;color:#cfe2ff;"
+                    + "font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;"
+                    + "margin-bottom:12px}"
+                    + ".shurl:focus{outline:none;border-color:#2f80ed}"
+                    + ".shrow{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}"
+                    + ".shpanel .primary{padding:9px 16px;border-radius:9px;border:0;"
+                    + "background:#2f80ed;color:#fff;font-size:13px;cursor:pointer}"
+                    + ".shpanel .primary:hover{background:#3d8bf5}"
+                    + ".shpanel .ghost{display:inline-flex;align-items:center;padding:9px 16px;"
+                    + "border-radius:9px;border:1px solid #2f5a8f;background:#16212e;"
+                    + "color:#8ec5ff;font-size:13px;cursor:pointer;text-decoration:none}"
+                    + ".shpanel .ghost:hover{background:#1d2c3d}"
+                    + ".shpanel .danger{padding:9px 16px;border-radius:9px;border:0;"
+                    + "background:#c0392b;color:#fff;font-size:13px;cursor:pointer}"
+                    + ".shpanel .danger:hover{background:#d64a3b}"
                     + "footer{margin-top:26px;color:#4a525c;font-size:11px;"
                     + "word-break:break-all;text-align:center}"
                     // 播放器
@@ -9343,6 +9795,10 @@ public class HttpServer {
         SVG.put("download",
                 "<path d='M12 3.5v11'/><path d='M7.4 10.2L12 15l4.6-4.8'/>"
                         + "<path d='M4.5 17.5v1.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-1.5'/>");
+        SVG.put("share",
+                "<circle cx='17.5' cy='5.5' r='2.5'/><circle cx='6.5' cy='12' r='2.5'/>"
+                        + "<circle cx='17.5' cy='18.5' r='2.5'/>"
+                        + "<path d='M8.7 10.8l6.6-3.9M8.7 13.2l6.6 3.9'/>");
         SVG.put("edit",
                 "<path d='M16.2 3.8l4 4L9 19H5v-4z'/><path d='M13.6 6.4l4 4'/>");
         SVG.put("move",
@@ -10816,6 +11272,15 @@ public class HttpServer {
         String remoteAddr = "";
         /** 已登录用户；null 表示匿名 */
         Users.User user;
+
+        /**
+         * 本次请求带的分享码（{@code /@AB7K3/...} 里的 AB7K3）。
+         *
+         * <p>由 {@code takeShareCode()} 在路由前填好，同时把 {@link #path} 里的
+         * 前缀剥掉 —— 后面的 handler 看到的仍是「没有分享码的普通路径」，
+         * 只有鉴权那一层（needLoginForFile）会回头看这个字段。
+         */
+        String shareCode;
 
         /** 当前访问者的显示名 */
         String who() {

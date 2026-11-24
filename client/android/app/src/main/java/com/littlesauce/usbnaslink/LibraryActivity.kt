@@ -64,6 +64,18 @@ class LibraryActivity : AppCompatActivity() {
 
         /** 多选批量删除单批上限：一次 POST 删太多会让服务端一口气卡住好几秒 */
         private const val PHOTO_DEL_BATCH = 40
+
+        /**
+         * 账号动作的机器可读代号。
+         *
+         * 原来是拿中文 label 当 `when` 的分支键，翻译一改逻辑就断。现在代号是常量、
+         * 显示名走 opLabel() —— 加了语言之后这两件事必须分开。
+         */
+        const val OP_ADD = "add"
+        const val OP_PW = "pw"
+        const val OP_LEVEL = "level"
+        const val OP_KICK = "kick"
+        const val OP_DEL = "del"
     }
 
     private lateinit var prefs: Prefs
@@ -122,6 +134,8 @@ class LibraryActivity : AppCompatActivity() {
         // 先把配色定下来再建界面：Palette 的取值是「当时」算的，界面建完再改
         // 只会影响之后新建的控件，已画的那些不会自己变色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         prefs = Prefs(this)
         baseUrl = intent.getStringExtra(EXTRA_URL) ?: run {
             finish(); return
@@ -141,7 +155,7 @@ class LibraryActivity : AppCompatActivity() {
         }
         val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         titleBox.addView(TextView(this).apply {
-            text = intent.getStringExtra(EXTRA_NAME) ?: "媒体库"
+            text = intent.getStringExtra(EXTRA_NAME) ?: getString(R.string.lib_library)
             setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -161,7 +175,7 @@ class LibraryActivity : AppCompatActivity() {
         // 切换后调 ThemeCtl.toggle：它先本地重涂再重建界面（颜色是取值时算的，
         // 已建好的 View 不会自己变），同时把新值 POST 给服务端 `/_theme`，
         // 让同一台设备的网页端下次打开也是这个色。
-        themeBtn = Palette.ghost(this, ThemeCtl.label()).apply {
+        themeBtn = Palette.ghost(this, getString(ThemeCtl.labelRes())).apply {
             setOnClickListener {
                 android.util.Log.i("USBNASLink", "theme click, now=" + Palette.mode +
                         " day=" + Palette.isDay() + " base=" + baseUrl + " sid=" + sid)
@@ -187,7 +201,7 @@ class LibraryActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(16), 0, dp(16), dp(8))
         }
-        for ((i, label) in listOf("影视", "音乐", "图书", "相册", "管理设置", "网页").withIndex()) {
+        for ((i, label) in tabLabels().withIndex()) {
             val t = Palette.tab(this, label, false).apply {
                 if (i == TAB_WEB) setOnClickListener { openWeb() } else setOnClickListener { selectTab(i) }
             }
@@ -215,21 +229,21 @@ class LibraryActivity : AppCompatActivity() {
             setBackgroundColor(Palette.CARD)
             setPadding(dp(14), dp(6), dp(10), dp(6))
             photoSelCount = TextView(this@LibraryActivity).apply {
-                text = "已选 0 张"
+                text = getString(R.string.lib_photo_sel, 0)
                 setTextColor(Palette.FG)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             }
             addView(photoSelCount, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            photoSelAll = Palette.ghost(this@LibraryActivity, "全选").apply {
+            photoSelAll = Palette.ghost(this@LibraryActivity, getString(R.string.lib_select_all)).apply {
                 setOnClickListener { toggleSelectAllPhotos() }
             }
             addView(photoSelAll, LinearLayout.LayoutParams(dp(64), dp(34)))
-            addView(Palette.outline(this@LibraryActivity, "删除").apply {
+            addView(Palette.outline(this@LibraryActivity, getString(R.string.common_delete)).apply {
                 setTextColor(Palette.WARN_HI)
                 setOnClickListener { confirmDeletePhotos() }
             }, LinearLayout.LayoutParams(dp(64), dp(34)).apply { leftMargin = dp(6) })
-            addView(Palette.ghost(this@LibraryActivity, "取消").apply {
+            addView(Palette.ghost(this@LibraryActivity, getString(R.string.common_cancel)).apply {
                 setOnClickListener { exitPhotoSel() }
             }, LinearLayout.LayoutParams(dp(64), dp(34)).apply { leftMargin = dp(6) })
         }
@@ -246,7 +260,7 @@ class LibraryActivity : AppCompatActivity() {
             setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(16), dp(6), dp(16), dp(6))
-            text = "加载中…"
+            text = getString(R.string.common_loading)
         }
         root.addView(hint)
 
@@ -271,6 +285,10 @@ class LibraryActivity : AppCompatActivity() {
         setContentView(root)
         // 状态栏/手势栏透明，看到的永远是 root 的 #0F141A（详见 Immersive.tintBars）
         Immersive.tintBars(this, Palette.BG)
+        // 铺满之后内容坐标从 (0,0) 起算，顶栏会被状态栏压住、横屏左侧会被挖孔吃掉。
+        // 让 root 自己吃下 systemBars + cutout 的 inset，背景色照旧铺到全屏，
+        // 顶栏文字回到安全区。
+        Immersive.padBySystemBars(root)
         selectTab(0)
         reload()
 
@@ -310,25 +328,25 @@ class LibraryActivity : AppCompatActivity() {
         val p = plib
         hint.text = when {
             // 设置页不显示媒体统计：那一行的句式和「影视 N 部」完全不同族
-            currentTab == TAB_MANAGE -> "服务器端：站点与四个库的目录 · 客户端：自动更新与缓存"
+            currentTab == TAB_MANAGE -> getString(R.string.lib_hint_manage)
             currentTab == 3 -> {
-                if (p == null) "相册加载中…"
-                else "相册 ${p.photos.size} 张 · ${p.albumCount()} 个相册"
+                if (p == null) getString(R.string.lib_photo_loading)
+                else getString(R.string.lib_hint_photo, p.photos.size, p.albumCount())
             }
-            v == null && m == null && b == null -> "加载中…"
+            v == null && m == null && b == null -> getString(R.string.common_loading)
             currentTab == 0 -> {
                 val groups = v?.groups?.size ?: 0
-                "影视 ${v?.videos?.size ?: 0} 部 · ${groups} 个目录"
+                getString(R.string.lib_hint_video, v?.videos?.size ?: 0, groups)
             }
             currentTab == 1 -> {
-                val base = "音乐 ${m?.tracks?.size ?: 0} 首 · ${m?.dirs?.size ?: 0} 个目录"
+                val base = getString(R.string.lib_hint_music, m?.tracks?.size ?: 0, m?.dirs?.size ?: 0)
                 when (musicView) {
-                    1 -> "$base · 按歌手"
-                    2 -> "$base · 按专辑"
+                    1 -> getString(R.string.lib_hint_music_artist, base)
+                    2 -> getString(R.string.lib_hint_music_album, base)
                     else -> base
                 }
             }
-            else -> "图书 ${b?.books?.size ?: 0} 本 · ${b?.groups?.size ?: 0} 个书架"
+            else -> getString(R.string.lib_hint_book, b?.books?.size ?: 0, b?.groups?.size ?: 0)
         }
     }
 
@@ -350,7 +368,7 @@ class LibraryActivity : AppCompatActivity() {
                 buildBooks()
                 updateHint()
                 if (!v.ok && !m.ok && !b.ok) {
-                    hint.text = "三个库都没取到：" + (v.error ?: m.error ?: b.error ?: "")
+                    hint.text = getString(R.string.lib_all_failed, v.error ?: m.error ?: b.error ?: "")
                 }
             }
         }
@@ -363,7 +381,7 @@ class LibraryActivity : AppCompatActivity() {
         val lib = vlib
         if (lib == null || lib.videos.isEmpty()) {
             videoHost.addView(msg(if (lib == null) "…" else
-                "还没有影视。管理员在网页端「影视目录」里指一个目录就会出来。"))
+                getString(R.string.lib_empty_video)))
             return
         }
         // 按服务端给的 groups 分块：盘0 / 盘1 / 内部存储 各成一段，
@@ -371,7 +389,7 @@ class LibraryActivity : AppCompatActivity() {
         for (g in lib.groups) {
             val inGroup = lib.videos.filter { under(it.path, g.path.let { p -> if (p.endsWith("/")) p.trimEnd('/') else p }) }
             if (inGroup.isEmpty()) continue
-            videoHost.addView(sectionHeader(g.label ?: g.path, "${inGroup.size} 部", g.path))
+            videoHost.addView(sectionHeader(g.label ?: g.path, getString(R.string.lib_group_videos, inGroup.size), g.path))
             var i = 0
             while (i < inGroup.size) {
                 val line = LinearLayout(this).apply {
@@ -394,7 +412,7 @@ class LibraryActivity : AppCompatActivity() {
         // 兜底：不在任何 group 里的（理论上不会有）
         val orphan = lib.videos.filter { v -> lib.groups.none { under(v.path, it.path) } }
         if (orphan.isNotEmpty()) {
-            videoHost.addView(sectionHeader("其他", "${orphan.size} 部", ""))
+            videoHost.addView(sectionHeader(getString(R.string.lib_group_other), getString(R.string.lib_group_videos, orphan.size), ""))
             for (v in orphan) videoHost.addView(videoRow(v))
         }
     }
@@ -482,13 +500,13 @@ class LibraryActivity : AppCompatActivity() {
         val lib = mlib
         if (lib == null || lib.tracks.isEmpty()) {
             musicHost.addView(msg(if (lib == null) "…" else
-                "还没有音乐。管理员在网页端「音乐目录」里指一个目录就会出来。"))
+                getString(R.string.lib_empty_music)))
             return
         }
         val hits = Music.filter(lib.tracks, query)
         musicHost.addView(musicBar(hits.size))
         if (hits.isEmpty()) {
-            musicHost.addView(msg("没有匹配「$query」的歌。"))
+            musicHost.addView(msg(getString(R.string.lib_no_match, query)))
             return
         }
         when (musicView) {
@@ -508,7 +526,7 @@ class LibraryActivity : AppCompatActivity() {
         val albums = LinkedHashMap<String, MutableList<Track>>()
         for (t in hits) albums.getOrPut(t.dir) { ArrayList() }.add(t)
         for ((dir, songs) in albums) {
-            musicHost.addView(sectionHeader(folderName(dir), "${songs.size} 首", dir))
+            musicHost.addView(sectionHeader(folderName(dir), getString(R.string.lib_group_songs, songs.size), dir))
             for (t in songs) musicHost.addView(trackRow(songs, t))
         }
     }
@@ -537,7 +555,7 @@ class LibraryActivity : AppCompatActivity() {
             if (!open) continue
             for (t in b.tracks) musicHost.addView(trackRow(b.tracks, t))
         }
-        musicHost.addView(msg("共 ${buckets.size} 个${by.label}，点名字展开"))
+        musicHost.addView(msg(getString(R.string.lib_buckets, buckets.size, groupLabel(by))))
     }
 
     private fun bucketHead(b: Music.Bucket, open: Boolean, toggle: () -> Unit) =
@@ -573,7 +591,7 @@ class LibraryActivity : AppCompatActivity() {
         val row = LinearLayout(this@LibraryActivity).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        val labels = arrayOf("平铺", "按歌手", "按专辑")
+        val labels = arrayOf(getString(R.string.lib_music_view_flat), getString(R.string.lib_music_view_artist), getString(R.string.lib_music_view_album))
         for ((idx, label) in labels.withIndex()) {
             val on = musicView == idx
             // 与顶部三页签同一套视觉：选中主色底、未选中 Palette.BTN，
@@ -605,7 +623,7 @@ class LibraryActivity : AppCompatActivity() {
         addView(row)
         val search = android.widget.EditText(this@LibraryActivity).apply {
             setSingleLine()
-            hint = "搜歌手 / 专辑 / 歌名（共 $n 首）"
+            hint = getString(R.string.lib_search_hint, n)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setTextColor(Palette.FG2)
             setHintTextColor(Palette.FAINT)
@@ -659,7 +677,7 @@ class LibraryActivity : AppCompatActivity() {
             if (a.isNotEmpty()) bits.add(a)
             if (al.isNotEmpty() && al != a) bits.add(al)
             bits.add(Music.humanSize(t.size))
-            if (t.hasLyrics()) bits.add("有歌词")
+            if (t.hasLyrics()) bits.add(getString(R.string.lib_has_lyrics))
             text = bits.joinToString("   ·  ")
             setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
@@ -702,15 +720,15 @@ class LibraryActivity : AppCompatActivity() {
             return
         }
         if (!lib.ok) {
-            bookHost.addView(msg("书库取不到：" + lib.error))
+            bookHost.addView(msg(getString(R.string.lib_books_failed, lib.error ?: "")))
             return
         }
         if (lib.notConfigured()) {
-            bookHost.addView(msg("还没有书库。管理员在网页端「图书目录」里指一个目录就会出来。"))
+            bookHost.addView(msg(getString(R.string.lib_books_empty)))
             return
         }
         if (lib.books.isEmpty()) {
-            bookHost.addView(msg("书架上还没有书。"))
+            bookHost.addView(msg(getString(R.string.lib_shelf_empty)))
             return
         }
         // 按目录分层架：技术 / 科幻 / 各自一段，目录名本身就是分类
@@ -719,7 +737,7 @@ class LibraryActivity : AppCompatActivity() {
             shelves.getOrPut(b.dir) { ArrayList() }.add(b)
         }
         for ((dir, list) in shelves) {
-            bookHost.addView(sectionHeader(folderName(dir), "${list.size} 本", dir))
+            bookHost.addView(sectionHeader(folderName(dir), getString(R.string.lib_group_books, list.size), dir))
             for (b in list) bookHost.addView(bookRow(b))
         }
     }
@@ -779,7 +797,7 @@ class LibraryActivity : AppCompatActivity() {
      */
     private fun loadPhotos() {
         photoHost.removeAllViews()
-        photoHost.addView(msg("相册加载中…"))
+        photoHost.addView(msg(getString(R.string.lib_photo_loading)))
         val base = baseUrl
         val ck = sid
         post {
@@ -807,8 +825,8 @@ class LibraryActivity : AppCompatActivity() {
             return
         }
         if (!lib.ok) {
-            photoHost.addView(msg("相册取不到：" + lib.error))
-            photoHost.addView(Palette.outline(this, "重试").apply {
+            photoHost.addView(msg(getString(R.string.lib_photos_failed, lib.error ?: "")))
+            photoHost.addView(Palette.outline(this, getString(R.string.common_retry)).apply {
                 setOnClickListener { loadPhotos() }
             }, LinearLayout.LayoutParams(dp(108), dp(38)).apply {
                 leftMargin = dp(16); topMargin = dp(4); bottomMargin = dp(12)
@@ -818,11 +836,11 @@ class LibraryActivity : AppCompatActivity() {
         if (lib.notConfigured()) {
             // 「没配」和「配了但是空的」必须分开说：前者要去管理设置动一下，
             // 后者用户自己知道那个目录里没照片。
-            photoHost.addView(msg("还没有相册。到「管理设置 → 相册目录」里指一个放照片的目录就会出来。"))
+            photoHost.addView(msg(getString(R.string.lib_photos_empty)))
             return
         }
         if (lib.photos.isEmpty()) {
-            photoHost.addView(msg("相册目录里还没有图。"))
+            photoHost.addView(msg(getString(R.string.lib_photos_dir_empty)))
             return
         }
 
@@ -832,7 +850,7 @@ class LibraryActivity : AppCompatActivity() {
             albums.getOrPut(p.dir ?: "") { ArrayList() }.add(p)
         }
         for ((dir, list) in albums) {
-            photoHost.addView(sectionHeader(folderName(dir), "${list.size} 张", dir))
+            photoHost.addView(sectionHeader(folderName(dir), getString(R.string.lib_group_photos, list.size), dir))
             // 三列网格：每行一个横向 LinearLayout，装 3 个等宽格子
             var row: LinearLayout? = null
             for ((i, p) in list.withIndex()) {
@@ -863,7 +881,7 @@ class LibraryActivity : AppCompatActivity() {
             }
         }
         photoHost.addView(TextView(this).apply {
-            text = "共 ${lib.photos.size} 张 · ${lib.albumCount()} 个相册"
+            text = getString(R.string.lib_photos_summary, lib.photos.size, lib.albumCount())
             setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setPadding(dp(16), dp(10), dp(16), dp(20))
@@ -934,8 +952,8 @@ class LibraryActivity : AppCompatActivity() {
         val on = photoSel.isNotEmpty()
         bar.visibility = if (on) View.VISIBLE else View.GONE
         if (!on) return
-        photoSelCount?.text = "已选 ${photoSel.size} 张"
-        photoSelAll?.text = if (photoSel.size >= albumOrdered().size) "取消全选" else "全选"
+        photoSelCount?.text = getString(R.string.lib_photo_sel, photoSel.size)
+        photoSelAll?.text = getString(if (photoSel.size >= albumOrdered().size) R.string.lib_photo_sel_full else R.string.lib_select_all)
     }
 
     private fun toggleSelectAllPhotos() {
@@ -960,10 +978,10 @@ class LibraryActivity : AppCompatActivity() {
         val picks = photoSel.toList()
         if (picks.isEmpty()) return
         val dlg = AlertDialog.Builder(this)
-            .setTitle("删除 ${picks.size} 张照片？")
-            .setMessage("会从 NAS 的磁盘上真的删掉（不进回收站）。这个操作不能撤销。")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("删除") { _, _ -> doDeletePhotos(picks) }
+            .setTitle(getString(R.string.lib_del_confirm_title, picks.size))
+            .setMessage(getString(R.string.lib_del_confirm_msg))
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .setPositiveButton(getString(R.string.common_delete)) { _, _ -> doDeletePhotos(picks) }
             .create()
         dlg.show()
         dlg.getButton(android.content.DialogInterface.BUTTON_POSITIVE)?.setTextColor(Palette.WARN_HI)
@@ -973,13 +991,13 @@ class LibraryActivity : AppCompatActivity() {
         if (adminState?.admin != true) {
             // 删文件属于写操作：不是管理员就先告诉用户去登录，而不是发一个注定 403 的请求
             Toast.makeText(this,
-                "删除需要管理员权限，先到上面「设置服务器端」里登录",
+                getString(R.string.lib_del_need_admin),
                 Toast.LENGTH_LONG).show()
             return
         }
         val base = baseUrl
         val ck = sid
-        msg("正在删除 ${picks.size} 张…")
+        msg(getString(R.string.lib_del_running, picks.size))
         post {
             var done = 0
             var failed = 0
@@ -997,12 +1015,12 @@ class LibraryActivity : AppCompatActivity() {
             }
             ui.post {
                 if (failed == 0) {
-                    Toast.makeText(this@LibraryActivity, "已删除 $done 张", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@LibraryActivity, getString(R.string.lib_del_done, done), Toast.LENGTH_SHORT).show()
                     exitPhotoSel()
                     loadPhotos()
                 } else {
                     Toast.makeText(this@LibraryActivity,
-                        "删了 $done 张，失败 $failed 张：${lastErr ?: "未知错误"}",
+                        getString(R.string.lib_del_partial, done, failed, lastErr ?: getString(R.string.common_unknown_error)),
                         Toast.LENGTH_LONG).show()
                     loadPhotos()
                 }
@@ -1271,7 +1289,7 @@ class LibraryActivity : AppCompatActivity() {
             val bmp = fetchImageFull(url, ck)
             ui.post {
                 if (bmp == null) {
-                    cap.text = "这张图打不开：${p.name}"
+                    cap.text = getString(R.string.lib_photo_open_failed, p.name)
                     return@post
                 }
                 photoBitmaps[key] = bmp
@@ -1403,13 +1421,14 @@ class LibraryActivity : AppCompatActivity() {
         // 两块的标题下面都带一条状态行：服务器端那块写「登录身份」，客户端那块写
         // 「App 版本」，这样一眼能看出「我到底登没登进去」—— 原来只有一句
         // 静态说明，登录过期了也照样写着要登录，用户会以为按钮坏了。
-        manageHost.addView(blockHeader("1 · 设置服务器端",
-            "站点名称、四个库的目录、账号，都是存在服务端的全局配置，所有客户端共用；改它需要管理员账号。"))
+        manageHost.addView(blockHeader(getString(R.string.set_server_section),
+            getString(R.string.set_server_section_note)))
         manageHost.addView(serverStatusCard())
         manageHost.addView(nasSettingsCard())
         manageHost.addView(accountsCard())
-        manageHost.addView(blockHeader("2 · 设置客户端",
-            "下面这些只影响这台手机上的 App，不上传、不同步、改完立刻生效。"))
+        manageHost.addView(blockHeader(getString(R.string.set_client_section),
+            getString(R.string.set_client_section_note)))
+        manageHost.addView(languageCard())
         manageHost.addView(ApkUpdater.settingsView(this))
         loadManage()
     }
@@ -1470,15 +1489,82 @@ class LibraryActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(6), dp(12), dp(6))
         }
-        serverStatusRow = Palette.note(this, "正在确认登录状态…", Palette.DIM).apply {
+        serverStatusRow = Palette.note(this, getString(R.string.set_checking_login), Palette.DIM).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
         row.addView(serverStatusRow, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(Palette.outline(this, "刷新").apply {
+        row.addView(Palette.outline(this, getString(R.string.common_refresh)).apply {
             setOnClickListener { refreshManage(true) }
         }, LinearLayout.LayoutParams(dp(72), dp(36)).apply { leftMargin = dp(8) })
         return row
     }
+
+    /**
+     * 「语言 / Language」卡片。
+     *
+     * 放在「设置客户端」块的最前面而不是塞进自动更新那块：语言比更新更常用，
+     * 而且改完会整页重绘 —— 用户点完立刻就看到了结果，顺序上应该紧挨着块标题。
+     *
+     * 用两行单选（RadioGroup）而不是下拉或多次点击切换：
+     * 语言是「二选一 + 当前值要一眼看见」的选项，单选最直白。
+     * 注意 `which` 直接当选项序号用，不要再套 `2 - which` 之类的换算。
+     */
+    private fun languageCard(): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(14))
+        }
+        box.addView(TextView(this).apply {
+            text = getString(R.string.set_language)
+            setTextColor(Palette.FG)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        box.addView(Palette.note(this, getString(R.string.set_language_note), Palette.DIM2).apply {
+            setPadding(0, dp(4), 0, dp(8))
+        })
+        val group = android.widget.RadioGroup(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val labels = L.labels()
+        for ((i, label) in labels.withIndex()) {
+            val rb = android.widget.RadioButton(this).apply {
+                id = 1000 + i
+                text = label
+                isAllCaps = false
+                setTextColor(Palette.FG2)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                buttonTintList = android.content.res.ColorStateList.valueOf(Palette.ACCENT)
+                if ((i == 0 && !L.isEnglish()) || (i == 1 && L.isEnglish())) isChecked = true
+            }
+            group.addView(rb, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }
+        group.setOnCheckedChangeListener { _, checkedId ->
+            val which = checkedId - 1000
+            val lang = if (which == 1) L.Lang.EN else L.Lang.ZH
+            // 回调用「用户真的选了另一个」才切，避免初始化时 isChecked 触发的假事件
+            if (lang != L.current) L.switchTo(this, lang)
+        }
+        box.addView(group)
+        return box
+    }
+
+    /** 页签文案（顺序必须和 TAB_* 常量一致，否则点「影视」会跳到音乐）。 */
+    private fun tabLabels(): List<String> = listOf(
+        getString(R.string.lib_tab_video),
+        getString(R.string.lib_tab_music),
+        getString(R.string.lib_tab_book),
+        getString(R.string.lib_tab_photo),
+        getString(R.string.lib_tab_manage),
+        getString(R.string.lib_tab_web)
+    )
+
+    /** 音乐分组方式的显示名。`Music.GroupBy.label` 是服务端同款的中文枚举名，不能直接用。 */
+    private fun groupLabel(by: Music.GroupBy): String = when (by) {
+        Music.GroupBy.ARTIST -> getString(R.string.lib_music_view_artist)
+        else -> getString(R.string.lib_music_view_album)
+    }
+
     private fun nasSettingsCard(): View {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         adminCard = LinearLayout(this).apply {
@@ -1517,16 +1603,16 @@ class LibraryActivity : AppCompatActivity() {
         val box = accountsBox ?: return
         box.removeAllViews()
         box.addView(TextView(this).apply {
-            text = "账号"
+            text = getString(R.string.set_accounts)
             setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         box.addView(Palette.note(this,
-            "管理员能给所有人改目录；读写只能浏览和上传；只读只能看和下载。改密码会把这个人已登录的会话全踢下线。"))
+            getString(R.string.set_accounts_note)))
 
         if (!st.admin) {
-            box.addView(Palette.note(this, "需要管理员账号才能管理账号。", Palette.DIM2),
+            box.addView(Palette.note(this, getString(R.string.set_accounts_need_admin), Palette.DIM2),
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             return
@@ -1535,7 +1621,7 @@ class LibraryActivity : AppCompatActivity() {
         val accounts = st.accounts
         if (accounts.isEmpty()) {
             box.addView(Palette.note(this,
-                "服务端没返回账号列表（可能是旧版本）。网页端 /_admin 底部仍可管理。", Palette.DIM2),
+                getString(R.string.set_accounts_old_server), Palette.DIM2),
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         } else {
@@ -1547,14 +1633,14 @@ class LibraryActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(12), 0, 0)
         }
-        adder.addView(Palette.note(this, "新建账号", Palette.DIM))
-        val nameIn = Palette.field(this, "账号（字母数字）")
-        val pwIn = Palette.field(this, "密码")
+        adder.addView(Palette.note(this, getString(R.string.set_new_account), Palette.DIM))
+        val nameIn = Palette.field(this, getString(R.string.set_account_name))
+        val pwIn = Palette.field(this, getString(R.string.set_password))
         val levelSp = android.widget.Spinner(this).apply {
             background = Palette.round(this@LibraryActivity, Palette.FIELD, 8f, Palette.LINE, 1f)
             adapter = android.widget.ArrayAdapter(this@LibraryActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                listOf("只读 · 浏览下载", "读写 · 浏览播放上传", "管理员 · 全部权限"))
+                levelNames())
             setSelection(1)
         }
         adder.addView(nameIn, LinearLayout.LayoutParams(
@@ -1563,17 +1649,17 @@ class LibraryActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) })
         adder.addView(levelSp, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) })
-        adder.addView(Palette.solid(this, "创建账号").apply {
+        adder.addView(Palette.solid(this, getString(R.string.set_create_account)).apply {
             setOnClickListener {
                 val n = nameIn.text.toString().trim()
                 val p = pwIn.text.toString()
                 if (n.isEmpty() || p.isEmpty()) {
-                    toast("账号和密码都要填")
+                    toast(getString(R.string.set_need_name_pw))
                     return@setOnClickListener
                 }
                 // 下拉项与等级值同向：0 只读 / 1 读写 / 2 管理员
                 val lv = levelSp.selectedItemPosition.coerceIn(0, 2)
-                accountOp("建号", n, p, lv) {
+                accountOp(OP_ADD, n, p, lv) {
                     nameIn.setText("")
                     pwIn.setText("")
                 }
@@ -1602,14 +1688,14 @@ class LibraryActivity : AppCompatActivity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (a.me) top.addView(Palette.note(this, "当前", Palette.ACCENT_SOFT))
+        if (a.me) top.addView(Palette.note(this, getString(R.string.set_you_badge), Palette.ACCENT_SOFT))
         box.addView(top)
 
         val state = buildString {
-            append(a.levelName.ifEmpty { "未知等级" })
-            if (a.scoped) append(" · 限定目录")
-            append(if (a.online > 0) " · 在线 ${a.online} 台" else " · 未在线")
-            if (a.me) append(" · 就是你自己")
+            append(a.levelName.ifEmpty { getString(R.string.set_level_unknown) })
+            if (a.scoped) append(getString(R.string.set_scoped))
+            append(if (a.online > 0) getString(R.string.set_online, a.online) else getString(R.string.set_offline))
+            if (a.me) append(getString(R.string.set_that_is_you))
         }
         box.addView(Palette.note(this, state,
             if (a.online > 0) Palette.OK else Palette.DIM2))
@@ -1617,19 +1703,19 @@ class LibraryActivity : AppCompatActivity() {
         val acts = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        acts.addView(Palette.outline(this, "改等级").apply {
+        acts.addView(Palette.outline(this, getString(R.string.set_change_level)).apply {
             setOnClickListener { pickLevel(a) }
         }, LinearLayout.LayoutParams(0, dp(38), 1f))
-        acts.addView(Palette.outline(this, "改密码").apply {
+        acts.addView(Palette.outline(this, getString(R.string.set_change_pw)).apply {
             setOnClickListener { askPassword(a) }
         }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
         if (a.online > 0 && !a.me) {
-            acts.addView(Palette.outline(this, "踢下线").apply {
+            acts.addView(Palette.outline(this, getString(R.string.set_kick)).apply {
                 setOnClickListener { confirmKick(a) }
             }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
         }
         if (!a.me) {
-            acts.addView(Palette.outline(this, "删除").apply {
+            acts.addView(Palette.outline(this, getString(R.string.common_delete)).apply {
                 setTextColor(Palette.WARN_HI)
                 setOnClickListener { confirmDelete(a) }
             }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
@@ -1644,21 +1730,23 @@ class LibraryActivity : AppCompatActivity() {
         // 列表顺序与等级值同向：0 只读 / 1 读写 / 2 管理员。
         // 之前这里写成 lv = 2 - which，而 setSingleChoiceItems 的预选位置传的又是 cur，
         // 两边方向相反 —— 点第一项「只读」实际把人变成了管理员。
-        val opts = arrayOf("只读 · 浏览下载", "读写 · 浏览播放上传", "管理员 · 全部权限")
+        val opts = levelNames()
         val cur = a.level.coerceIn(0, 2)
         android.app.AlertDialog.Builder(this)
-            .setTitle("「${a.name}」的等级")
-            .setSingleChoiceItems(opts, cur) { d, which ->
+            .setTitle(getString(R.string.set_level_title, a.name ?: "?"))
+            // List 重载只在 API 21+ 有且要 ListAdapter；这里传 Array<CharSequence> 走
+            // 一直是 public 的那个重载，省得跟混淆/新旧 SDK 过不去
+            .setSingleChoiceItems(opts.toTypedArray(), cur) { d, which ->
                 d.dismiss()
                 if (which == a.level) return@setSingleChoiceItems
-                accountOp("改等级", a.name, "", which)
+                accountOp(OP_LEVEL, a.name ?: "", "", which)
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
 
     private fun askPassword(a: Admin.Account) {
-        val input = Palette.field(this, "新密码").apply { setInputType(
+        val input = Palette.field(this, getString(R.string.set_new_pw)).apply { setInputType(
             android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) }
         // 用 setView(view, l, t, r, b) 的五参重载在 Kotlin 里解析不到
         // （Builder 只有 setView(View) 和 setView(Int)），自己套一层带内边距的 FrameLayout
@@ -1668,54 +1756,54 @@ class LibraryActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
         }
         android.app.AlertDialog.Builder(this)
-            .setTitle("给「${a.name}」改密码")
-            .setMessage("改完这个账号已登录的地方会全部掉线，要用新密码重新登。")
+            .setTitle(getString(R.string.set_pw_title, a.name ?: "?"))
+            .setMessage(getString(R.string.set_pw_msg))
             .setView(holder)
-            .setPositiveButton("改") { _, _ ->
+            .setPositiveButton(getString(R.string.set_pw_do)) { _, _ ->
                 val p = input.text.toString()
                 if (p.isEmpty()) {
-                    toast("密码不能为空")
+                    toast(getString(R.string.set_pw_empty))
                 } else {
-                    accountOp("改密码", a.name, p, a.level)
+                    accountOp(OP_PW, a.name, p, a.level)
                 }
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
 
     private fun confirmKick(a: Admin.Account) {
         android.app.AlertDialog.Builder(this)
-            .setTitle("让「${a.name}」下线？")
-            .setMessage("账号还在，但已经登录的 ${a.online} 个会话会立刻失效，下次请求要重新登录。")
-            .setPositiveButton("踢下线") { _, _ -> accountOp("踢下线", a.name, "", a.level) }
-            .setNegativeButton("取消", null)
+            .setTitle(getString(R.string.set_kick_title, a.name ?: "?"))
+            .setMessage(getString(R.string.set_kick_msg, a.online))
+            .setPositiveButton(getString(R.string.set_kick)) { _, _ -> accountOp(OP_KICK, a.name, "", a.level) }
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
 
     private fun confirmDelete(a: Admin.Account) {
         android.app.AlertDialog.Builder(this)
-            .setTitle("删除账号「${a.name}」？")
-            .setMessage("这个操作不能撤销；他上传过的文件不会跟着删。")
-            .setPositiveButton("删除") { _, _ -> accountOp("删除", a.name, "", a.level) }
-            .setNegativeButton("取消", null)
+            .setTitle(getString(R.string.set_del_title, a.name ?: "?"))
+            .setMessage(getString(R.string.set_del_msg))
+            .setPositiveButton(getString(R.string.common_delete)) { _, _ -> accountOp(OP_DEL, a.name, "", a.level) }
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
 
     /** 四个账号动作统一走这里：后台请求 → toast → 重新拉一遍清单 */
-    private fun accountOp(label: String, name: String, pw: String, level: Int, onOk: () -> Unit = {}) {
+    private fun accountOp(op: String, name: String, pw: String, level: Int, onOk: () -> Unit = {}) {
         if (adminState?.admin != true) {
-            toast("当前会话不是管理员")
+            toast(getString(R.string.admin_not_admin_toast))
             return
         }
         val base = baseUrl
         val ck = sid
         adminPost {
             val r = try {
-                when (label) {
-                    "建号" -> Admin.addAccount(base, ck, name, pw, level, 9000)
-                    "改密码" -> Admin.setAccount(base, ck, name, pw, level, 9000)
-                    "改等级" -> Admin.setAccount(base, ck, name, "", level, 9000)
-                    "踢下线" -> Admin.kickAccount(base, ck, name, 9000)
+                when (op) {
+                    OP_ADD -> Admin.addAccount(base, ck, name, pw, level, 9000)
+                    OP_PW -> Admin.setAccount(base, ck, name, pw, level, 9000)
+                    OP_LEVEL -> Admin.setAccount(base, ck, name, "", level, 9000)
+                    OP_KICK -> Admin.kickAccount(base, ck, name, 9000)
                     else -> Admin.removeAccount(base, ck, name, 9000)
                 }
             } catch (t: Throwable) {
@@ -1723,26 +1811,46 @@ class LibraryActivity : AppCompatActivity() {
             }
             ui.post {
                 if (r.ok) {
-                    toast(r.msg?.ifEmpty { "$label 成功" } ?: "$label 成功")
+                    toast(r.msg?.ifEmpty { getString(R.string.set_op_ok, opLabel(op)) } ?: getString(R.string.set_op_ok, opLabel(op)))
                     onOk()
                     loadManage()
                 } else {
-                    toast("$label 没成功：${r.error ?: "未知错误"}")
+                    toast(getString(R.string.set_op_fail, opLabel(op), r.error ?: getString(R.string.common_unknown_error)))
                 }
             }
         }
     }
 
+    /** 动作代号的显示名（toast 用）。 */
+    private fun opLabel(op: String): String = when (op) {
+        OP_ADD -> getString(R.string.set_op_add)
+        OP_PW -> getString(R.string.set_op_pw)
+        OP_LEVEL -> getString(R.string.set_op_level)
+        OP_KICK -> getString(R.string.set_op_kick)
+        else -> getString(R.string.set_op_del)
+    }
+
+    /**
+     * 三个等级的下拉项文案，**顺序必须与 Users.LEVEL_READ/WRITE/ADMIN = 0/1/2 对齐**。
+     * 服务端认的是数字，这里只负责显示；`selectedItemPosition` 直接当 level 用，
+     * 千万不要写成 `2 - which` 之类的换算 —— 那样管理员会变成只读。
+     */
+    private fun levelNames(): List<String> = listOf(
+        getString(R.string.set_level_read),
+        getString(R.string.set_level_write),
+        getString(R.string.set_level_admin)
+    )
+
     /** 短提示：同时打到 logcat，MIUI 的 Toast 在 uiautomator / dumpsys 里都抓不到 */
     private fun toast(s: String) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
-        android.util.Log.i("USBNASLink", "toast: $s")
+        Diag.i("toast: $s")
     }
 
     /** 带用户反馈的刷新：转一下转圈提示，成功后 toast 报身份 */
     private fun refreshManage(showToast: Boolean) {
         val row = serverStatusRow
-        row?.text = "正在刷新…"
+        row?.text = getString(R.string.set_refreshing)
         row?.setTextColor(Palette.DIM)
         loadManage(showToast)
     }
@@ -1767,10 +1875,10 @@ class LibraryActivity : AppCompatActivity() {
                     Toast.makeText(
                         this@LibraryActivity,
                         when {
-                            !st.ok -> "刷新失败：${st.error ?: "没有响应"}"
-                            st.admin -> "已刷新：管理员「${st.who}」"
-                            st.logged -> "已刷新：账号「${st.who}」（${st.levelName}），不是管理员"
-                            else -> "已刷新：服务端看不到登录态，需要重新登录"
+                            !st.ok -> getString(R.string.set_refresh_failed, st.error ?: getString(R.string.common_no_response))
+                            st.admin -> getString(R.string.set_refreshed_admin, st.who ?: "?")
+                            st.logged -> getString(R.string.set_refreshed_user, st.who ?: "?", st.levelName ?: "?")
+                            else -> getString(R.string.set_refreshed_anon)
                         },
                         Toast.LENGTH_SHORT
                     ).show()
@@ -1784,19 +1892,19 @@ class LibraryActivity : AppCompatActivity() {
         val row = serverStatusRow ?: return
         when {
             !st.ok -> {
-                row.text = "连不上服务端：${st.error ?: "没有响应"}"
+                row.text = getString(R.string.set_cannot_reach, st.error ?: getString(R.string.common_no_response))
                 row.setTextColor(Palette.WARN_HI)
             }
             st.admin -> {
-                row.text = "已登录：管理员 ${st.who}（${st.levelName}）"
+                row.text = getString(R.string.set_logged_admin, st.who ?: "?", st.levelName ?: "?")
                 row.setTextColor(Palette.OK)
             }
             st.logged -> {
-                row.text = "已登录：${st.who}（${st.levelName}）· 改配置需要管理员"
+                row.text = getString(R.string.set_logged_user, st.who ?: "?", st.levelName ?: "?")
                 row.setTextColor(Palette.WARN_HI)
             }
             else -> {
-                row.text = "未登录（会话已过期或从未登录）"
+                row.text = getString(R.string.set_logged_out)
                 row.setTextColor(Palette.WARN_HI)
             }
         }
@@ -1813,22 +1921,22 @@ class LibraryActivity : AppCompatActivity() {
 
         if (!st.ok) {
             card.addView(Palette.note(this,
-                "读不到服务端配置：${st.error ?: "没有响应"}（多半是它还不支持 /_admin/api）",
+                getString(R.string.set_config_failed, st.error ?: getString(R.string.common_no_response)),
                 Palette.WARN_HI))
-            card.addView(Palette.outline(this, "重试").apply { setOnClickListener { loadManage() } },
+            card.addView(Palette.outline(this, getString(R.string.common_retry)).apply { setOnClickListener { loadManage() } },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38))
                     .apply { topMargin = dp(10) })
             return
         }
         if (!st.admin) {
             card.addView(Palette.note(this, if (st.logged)
-                "当前账号「${st.who}」是${st.levelName}，改设置需要管理员。"
+                getString(R.string.set_need_admin_user, st.who ?: "?", st.levelName ?: "?")
             else
-                "还没登录，或者登录已过期；改设置需要管理员账号。", Palette.DIM))
+                getString(R.string.set_need_admin_login), Palette.DIM))
             // 只留一个按钮：刷新交给上面状态行右边那颗，这里再放一颗就成了
             // 「刷新」和「刷新会话」两个说法做同一件事，用户第一反应是「哪个算数」。
             val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            btns.addView(Palette.solid(this, if (st.logged) "换管理员账号" else "去网页端登录").apply {
+            btns.addView(Palette.solid(this, getString(if (st.logged) R.string.admin_switch_user else R.string.admin_go_login)).apply {
                 setOnClickListener {
                     openWebForLogin()
                 }
@@ -1839,53 +1947,53 @@ class LibraryActivity : AppCompatActivity() {
             // 非管理员也要能看见当前配置是什么（只读体面地显示出来）
             if (!st.logged) return
         } else {
-            card.addView(Palette.note(this, "管理员：${st.who}（${st.levelName}）", Palette.OK),
+            card.addView(Palette.note(this, getString(R.string.admin_current_user, st.who ?: "?", st.levelName ?: "?"), Palette.OK),
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         }
 
         val editable = st.admin
-        titleBox = Palette.field(this, "显示在浏览器标题栏和响应头里").apply {
+        titleBox = Palette.field(this, getString(R.string.admin_site_title_hint)).apply {
             setText(st.title ?: "")
             isEnabled = editable
         }
-        card.addView(manageSection("站点名称",
-            "最多 24 个字符；留空会用默认的「一只肥鼠的NAS」。",
+        card.addView(manageSection(getString(R.string.admin_site_title),
+            getString(R.string.admin_site_title_note),
             titleBox, null, editable) {
-            save("title", "站点名称", titleBox?.text?.toString() ?: "")
+            save("title", getString(R.string.admin_site_title), titleBox?.text?.toString() ?: "")
         })
 
         musicTree = DirTree(this).apply { setPaths(st.musicDirs ?: emptyList()) }
-        card.addView(manageSection("音乐目录",
-            "客户端播放器只在这些目录里找歌。点方框勾选、点文字展开。",
+        card.addView(manageSection(getString(R.string.admin_music_dirs),
+            getString(R.string.admin_music_dirs_note),
             null, musicTree, editable) {
-            save("music", "音乐目录", musicTree?.checkedPaths()?.joinToString("\n") ?: "")
+            save("music", getString(R.string.admin_music_dirs), musicTree?.checkedPaths()?.joinToString("\n") ?: "")
         })
         musicTree!!.rebuild(st.choices ?: emptyList(), st.musicDirs ?: emptyList())
 
         videoTree = DirTree(this).apply { setPaths(st.videoDirs ?: emptyList()) }
-        card.addView(manageSection("影视目录",
-            "电影和剧可以分在不同盘里，客户端按目录分块显示；海报和 .nfo 从视频同目录读。",
+        card.addView(manageSection(getString(R.string.admin_video_dirs),
+            getString(R.string.admin_video_dirs_note),
             null, videoTree, editable) {
-            save("video", "影视目录", videoTree?.checkedPaths()?.joinToString("\n") ?: "")
+            save("video", getString(R.string.admin_video_dirs), videoTree?.checkedPaths()?.joinToString("\n") ?: "")
         })
         videoTree!!.rebuild(st.choices ?: emptyList(), st.videoDirs ?: emptyList())
 
         bookTree = DirTree(this).apply { setPaths(st.bookDirs ?: emptyList()) }
-        card.addView(manageSection("图书目录",
-            "「图书」页只显示这里的书；不配就是空书库（不会去扫全盘找 txt）。",
+        card.addView(manageSection(getString(R.string.admin_book_dirs),
+            getString(R.string.admin_book_dirs_note_short),
             null, bookTree, editable) {
-            save("book", "图书目录", bookTree?.checkedPaths()?.joinToString("\n") ?: "")
+            save("book", getString(R.string.admin_book_dirs), bookTree?.checkedPaths()?.joinToString("\n") ?: "")
         })
         bookTree!!.rebuild(st.choices ?: emptyList(), st.bookDirs ?: emptyList())
 
         // 相册：第四个库。特意排在最后 —— 前三个是「本来就有内容」的库，
         // 相册是「你要先指个目录」才有内容的，放最后不打乱前三个的肌肉记忆。
         photoTree = DirTree(this).apply { setPaths(st.photoDirs ?: emptyList()) }
-        card.addView(manageSection("相册目录",
-            "「相册」页只显示这里的图。认 jpg/jpeg/png/webp/bmp/gif/heic；不配就没有相册。",
+        card.addView(manageSection(getString(R.string.admin_photo_dirs),
+            getString(R.string.admin_photo_dirs_note),
             null, photoTree, editable) {
-            save("photo", "相册目录", photoTree?.checkedPaths()?.joinToString("\n") ?: "")
+            save("photo", getString(R.string.admin_photo_dirs), photoTree?.checkedPaths()?.joinToString("\n") ?: "")
         })
         photoTree!!.rebuild(st.choices ?: emptyList(), st.photoDirs ?: emptyList())
     }
@@ -1920,12 +2028,12 @@ class LibraryActivity : AppCompatActivity() {
             box.addView(tree.component(), LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = dp(6) })
-            box.addView(Palette.note(this, "已选路径（保存的就是这里的每一行，也可以直接手改）"))
+            box.addView(Palette.note(this, getString(R.string.admin_picked_paths)))
             box.addView(tree.editor(), LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         if (editable) {
-            box.addView(Palette.solid(this, "保存$title", Palette.BTN, Palette.FG2).apply {
+            box.addView(Palette.solid(this, getString(R.string.admin_save_prefix, title), Palette.BTN, Palette.FG2).apply {
                 setOnClickListener { onSave() }
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42))
                 .apply { topMargin = dp(10) })
@@ -1935,7 +2043,7 @@ class LibraryActivity : AppCompatActivity() {
 
     private fun save(action: String, label: String, value: String) {
         if (adminState?.admin != true) {
-            Toast.makeText(this, "当前会话不是管理员", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.admin_not_admin_toast), Toast.LENGTH_SHORT).show()
             return
         }
         val base = baseUrl
@@ -1956,8 +2064,8 @@ class LibraryActivity : AppCompatActivity() {
             ui.post {
                 Toast.makeText(
                     this@LibraryActivity,
-                    if (r.ok) "$label 已保存（${r.msg ?: "已生效"}）"
-                    else "$label 没保存：${r.error ?: "未知错误"}",
+                    if (r.ok) getString(R.string.admin_saved, label, r.msg ?: getString(R.string.admin_saved_ok))
+                    else getString(R.string.admin_save_failed, label, r.error ?: getString(R.string.common_unknown_error)),
                     if (r.ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                 ).show()
                 if (r.ok) {

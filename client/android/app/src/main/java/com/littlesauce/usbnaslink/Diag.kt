@@ -14,6 +14,24 @@ import java.net.Socket
  */
 object Diag {
 
+    private const val TAG = "USBNASLink"
+
+    /**
+     * 诊断日志。
+     *
+     * 单独给两个入口而不是各文件直接 `Log.i("USBNASLink", …)`：这个 tag 之前
+     * 在七八个文件里各写了一遍，改一次名字要全仓库搜。更要紧的是 MIUI 上
+     * `logcat -s USBNASLink` 会漏掉部分行，排查时得用 `-b main -d -t N` 宿主侧筛，
+     * 所以 tag 必须**逐字一致**，集中在这里最省心。
+     */
+    fun i(msg: String) {
+        android.util.Log.i(TAG, msg)
+    }
+
+    fun w(msg: String, t: Throwable? = null) {
+        android.util.Log.w(TAG, msg, t)
+    }
+
     data class Line(val ok: Boolean, val text: String)
 
     fun tcp(ip: String, port: Int, timeoutMs: Int = 1500): Line {
@@ -23,9 +41,9 @@ object Diag {
             s = Socket()
             s.connect(InetSocketAddress(ip, port), timeoutMs)
             val ms = System.currentTimeMillis() - t0
-            Line(true, "TCP $ip:$port 通，$ms ms，本端=${s.localAddress.hostAddress}")
+            Line(true, "TCP $ip:$port OK, $ms ms, local=${s.localAddress.hostAddress}")
         } catch (t: Throwable) {
-            Line(false, "TCP $ip:$port 失败：" + t.javaClass.simpleName +
+            Line(false, "TCP $ip:$port failed: " + t.javaClass.simpleName +
                 (t.message?.let { " ($it)" } ?: ""))
         } finally {
             try { s?.close() } catch (_: Throwable) {}
@@ -44,11 +62,11 @@ object Diag {
             val inp: InputStream = s.getInputStream()
             val buf = ByteArray(512)
             val n = inp.read(buf)
-            if (n <= 0) return Line(false, "HTTP $ip:$port 建连后无响应")
+            if (n <= 0) return Line(false, "HTTP $ip:$port no response after connect")
             val head = String(buf, 0, n, Charsets.ISO_8859_1)
             Line(true, "HTTP $path -> ${head.lineSequence().firstOrNull() ?: "?"}")
         } catch (t: Throwable) {
-            Line(false, "HTTP $ip:$port 失败：" + t.javaClass.simpleName +
+            Line(false, "HTTP $ip:$port failed: " + t.javaClass.simpleName +
                 (t.message?.let { " ($it)" } ?: ""))
         } finally {
             try { s?.close() } catch (_: Throwable) {}

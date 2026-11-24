@@ -50,6 +50,8 @@ class ScanActivity : AppCompatActivity() {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         setContentView(R.layout.activity_scan)
         // 布局里写的 #0F141A 是夜间底色，日间模式下得按 Palette.BG 重涂一次
         // （XML 里的颜色是死的，不会跟着 Palette 走）。
@@ -57,6 +59,8 @@ class ScanActivity : AppCompatActivity() {
         // 扫描页底色同 Palette.BG：系统栏透明后看到的永远是它，
         // tintBars 会按亮度自动选图标深浅。
         Immersive.tintBars(this, Palette.BG)
+        // 铺满 + 补 inset：根布局吃下状态栏/挖孔，标题和列表都不会被压到栏底下。
+        findViewById<View>(R.id.scanRoot)?.let { Immersive.padBySystemBars(it) }
         prefs = Prefs(this)
 
         list = findViewById(R.id.list)
@@ -247,7 +251,7 @@ class ScanActivity : AppCompatActivity() {
                 subtitle.text = if (found.isEmpty()) {
                     getString(R.string.scan_hint)
                 } else {
-                    "找到 ${found.size} 台"
+                    getString(R.string.scan_found_count, found.size)
                 }
                 empty.visibility = if (found.isEmpty()) View.VISIBLE else View.GONE
                 maybeAutoOpen()
@@ -327,7 +331,7 @@ class ScanActivity : AppCompatActivity() {
         val box = FrameLayout(this)
         box.setPadding(pad, pad / 2, pad, 0)
         val input = EditText(this).apply {
-            hint = "192.168.1.10 或 192.168.1.10:8080"
+            hint = getString(R.string.scan_manual_hint)
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine()
             prefs.lastUrl?.let { setText(it.removePrefix("http://")) }
@@ -335,10 +339,10 @@ class ScanActivity : AppCompatActivity() {
         box.addView(input)
 
         AlertDialog.Builder(this)
-            .setTitle(R.string.manual)
+            .setTitle(R.string.scan_manual)
             .setView(box)
-            .setNegativeButton(R.string.login_cancel, null)
-            .setPositiveButton(R.string.connect) { _, _ ->
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .setPositiveButton(getString(R.string.scan_connect)) { _, _ ->
                 val raw = input.text.toString().trim()
                     .removePrefix("http://").removeSuffix("/")
                 if (raw.isEmpty()) return@setPositiveButton
@@ -353,7 +357,7 @@ class ScanActivity : AppCompatActivity() {
                             adapter.add(si)
                             connectTo(si)
                         } else {
-                            Toast.makeText(this, "连不上 $hp", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, getString(R.string.scan_connect_failed, hp), Toast.LENGTH_SHORT).show()
                         }
                     }
                 }

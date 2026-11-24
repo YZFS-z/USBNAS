@@ -82,16 +82,16 @@ object ApkUpdater {
             prefs.lastUpdateCheck = System.currentTimeMillis()
             activity.runOnUiThread {
                 if (!info.ok) {
-                    if (manual) toast(activity, "检查失败：" + info.error)
+                    if (manual) toast(activity, activity.getString(R.string.upd_check_fail, info.error))
                     return@runOnUiThread
                 }
                 val skip = prefs.skipVersion
                 if (!Update.newer(info, versionName(activity))) {
-                    if (manual) toast(activity, "已经是最新版本（" + versionName(activity) + "）")
+                    if (manual) toast(activity, activity.getString(R.string.upd_latest, versionName(activity)))
                     return@runOnUiThread
                 }
                 if (skip.isNotEmpty() && Update.compare(info.version, skip) == 0) {
-                    if (manual) toast(activity, "这个版本（" + skip + "）已被你跳过")
+                    if (manual) toast(activity, activity.getString(R.string.upd_skipped_ver, skip))
                     return@runOnUiThread
                 }
                 showFound(activity, info)
@@ -118,7 +118,7 @@ object ApkUpdater {
 
         // 标题行：左侧「发现新版本」，右侧版本对比
         wrap.addView(TextView(activity).apply {
-            text = "发现新版本 " + info.version
+            text = activity.getString(R.string.upd_found, info.version)
             setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -126,7 +126,7 @@ object ApkUpdater {
         wrap.addView(TextView(activity).apply {
             val size = if (info.asset != null && info.asset.size > 0)
                 " · " + info.asset.humanSize() else ""
-            text = "当前 " + versionName(activity) + " → " + info.version + size
+            text = activity.getString(R.string.upd_current, versionName(activity), info.version, size)
             setTextColor(Palette.ACCENT_HI)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(activity, 6), 0, 0)
@@ -165,7 +165,7 @@ object ApkUpdater {
         }
 
         wrap.addView(TextView(activity).apply {
-            text = "下载完会打开系统安装器；覆盖安装，已保存的服务器列表与设置都不动。"
+            text = activity.getString(R.string.upd_install_note)
             setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setPadding(0, dp(activity, 12), 0, dp(activity, 14))
@@ -192,13 +192,13 @@ object ApkUpdater {
             }
 
         val dlg = AlertDialog.Builder(activity).setView(wrap).create()
-        val bLater = op("稍后", false) { dlg.dismiss() }
-        val bSkip = op("跳过此版本", false) {
+        val bLater = op(activity.getString(R.string.upd_later), false) { dlg.dismiss() }
+        val bSkip = op(activity.getString(R.string.upd_skip), false) {
             prefs.skipVersion = info.version
-            toast(activity, "以后不再提示 " + info.version)
+            toast(activity, activity.getString(R.string.upd_no_more, info.version))
             dlg.dismiss()
         }
-        val bGo = op("下载并安装", true) {
+        val bGo = op(activity.getString(R.string.upd_go), true) {
             dlg.dismiss()
             download(activity, info)
         }
@@ -249,7 +249,7 @@ object ApkUpdater {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         val label = TextView(activity).apply {
-            text = "连接中…"
+            text = activity.getString(R.string.upd_connecting)
             setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             gravity = Gravity.END
@@ -267,7 +267,7 @@ object ApkUpdater {
             setPadding(pad, dp(activity, 16), pad, dp(activity, 16))
             background = Palette.round(activity, Palette.CARD, 16f, Palette.LINE, 1f)
             addView(TextView(activity).apply {
-                text = "正在下载 " + info.version
+                text = activity.getString(R.string.upd_downloading, info.version)
                 setTextColor(Palette.FG)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -319,14 +319,14 @@ object ApkUpdater {
                         }
                     }
                 }
-                if (!ok) throw java.io.IOException("下载不完整")
+                if (!ok) throw java.io.IOException(activity.getString(R.string.upd_incomplete))
             } catch (t: Throwable) {
                 err = Update.describeForUser(t)
             }
             activity.runOnUiThread {
                 dlg.dismiss()
                 if (err != null) {
-                    toast(activity, "下载失败：" + err)
+                    toast(activity, activity.getString(R.string.upd_download_fail, err))
                     openUrl(activity, if (info.pageUrl.isNotEmpty()) info.pageUrl else PAGE)
                     return@runOnUiThread
                 }
@@ -354,7 +354,7 @@ object ApkUpdater {
             Log.i(TAG, "install " + version + " -> " + apk.absolutePath)
         } catch (t: Throwable) {
             // 有些壳（比如没装安装器组件的定制 ROM）会在这里抛 ActivityNotFoundException
-            toast(activity, "打不开安装器：" + t.javaClass.simpleName + "，安装包在 " + apk.absolutePath)
+            toast(activity, activity.getString(R.string.upd_no_installer, t.javaClass.simpleName, apk.absolutePath))
         }
     }
 
@@ -390,7 +390,7 @@ object ApkUpdater {
             background = Palette.round(activity, Palette.CARD, 12f, Palette.LINE, 1f)
         }
         card.addView(TextView(activity).apply {
-            text = "自动更新"
+            text = activity.getString(R.string.upd_title)
             setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -402,7 +402,7 @@ object ApkUpdater {
             setPadding(0, dp(activity, 10), 0, 0)
         }
         row.addView(TextView(activity).apply {
-            text = "联网检查新版本"
+            text = activity.getString(R.string.upd_check_online)
             setTextColor(Palette.FG2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -417,24 +417,22 @@ object ApkUpdater {
         card.addView(row)
 
         card.addView(TextView(activity).apply {
-            text = "当前 " + versionName(activity) +
-                    "。打开后每次启动最多查一次 GitHub Release（间隔不少于 6 小时）；" +
-                    "关掉就一个请求都不发。"
+            text = activity.getString(R.string.upd_check_note, versionName(activity))
             setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setPadding(0, dp(activity, 8), 0, dp(activity, 12))
         })
 
         val ops = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        ops.addView(smallButton(activity, "立即检查", true).apply {
+        ops.addView(smallButton(activity, activity.getString(R.string.upd_check_now), true).apply {
             setOnClickListener { checkOnStart(activity, true) }
         })
         val skip = prefs.skipVersion
         if (skip.isNotEmpty()) {
-            ops.addView(smallButton(activity, "不再跳过 " + skip, false).apply {
+            ops.addView(smallButton(activity, activity.getString(R.string.upd_unskip, skip), false).apply {
                 setOnClickListener {
                     prefs.skipVersion = ""
-                    text = "已清除跳过标记"
+                    text = activity.getString(R.string.upd_skip_cleared)
                     isEnabled = false
                 }
             })
@@ -459,17 +457,17 @@ object ApkUpdater {
             background = Palette.round(activity, Palette.CARD, 12f, Palette.LINE, 1f)
         }
         about.addView(TextView(activity).apply {
-            text = "关于"
+            text = activity.getString(R.string.upd_about)
             setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         val lines = listOf(
-            "版本" to versionName(activity),
-            "上次检查" to (if (prefs.lastUpdateCheck > 0)
+            activity.getString(R.string.upd_k_version) to versionName(activity),
+            activity.getString(R.string.upd_k_last_check) to (if (prefs.lastUpdateCheck > 0)
                 android.text.format.DateFormat.format("MM-dd HH:mm", prefs.lastUpdateCheck).toString()
-            else "从未检查"),
-            "发布页" to PAGE
+            else activity.getString(R.string.upd_never_checked)),
+            activity.getString(R.string.upd_k_releases) to PAGE
         )
         for ((k, v) in lines) {
             val r = LinearLayout(activity).apply {
@@ -487,14 +485,14 @@ object ApkUpdater {
                 setTextColor(Palette.FG2)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                if (k == "发布页") {
+                if (k == activity.getString(R.string.upd_k_releases)) {
                     setTextColor(Palette.ACCENT_HI)
                     setOnClickListener { openUrl(activity, PAGE) }
                 }
             })
             about.addView(r)
         }
-        about.addView(smallButton(activity, "打开发布页", false).apply {
+        about.addView(smallButton(activity, activity.getString(R.string.upd_open_releases), false).apply {
             setOnClickListener { openUrl(activity, PAGE) }
             val lp = layoutParams as LinearLayout.LayoutParams
             lp.topMargin = dp(activity, 12)
@@ -521,7 +519,7 @@ object ApkUpdater {
             background = Palette.round(activity, Palette.CARD, 12f, Palette.LINE, 1f)
         }
         card.addView(TextView(activity).apply {
-            text = "存储"
+            text = activity.getString(R.string.set_storage)
             setTextColor(Palette.FG)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -530,17 +528,17 @@ object ApkUpdater {
             setTextColor(Palette.DIM2)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(activity, 8), 0, 0)
-            text = "统计中…"
+            text = activity.getString(R.string.upd_counting)
         }
         card.addView(detail)
         card.addView(TextView(activity).apply {
-            text = "PDF 只留最近几本，安装包装完就不再保留；网页缓存不动，删了会丢滚动位置和登录态。"
+            text = activity.getString(R.string.upd_storage_note)
             setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setPadding(0, dp(activity, 6), 0, 0)
         })
 
-        val btn = smallButton(activity, "立即清理", false)
+        val btn = smallButton(activity, activity.getString(R.string.upd_clean_now), false)
         val lp = btn.layoutParams as LinearLayout.LayoutParams
         lp.topMargin = dp(activity, 12)
         card.addView(btn)
@@ -549,22 +547,22 @@ object ApkUpdater {
             Thread {
                 val u = CacheMgr.usage(activity)
                 activity.runOnUiThread {
-                    detail.text = if (u.totalBytes <= 0) "没有可清理的缓存"
-                    else u.text() + " · 共 " + u.human(u.totalBytes)
+                    detail.text = if (u.totalBytes <= 0) activity.getString(R.string.upd_nothing_to_clean)
+                    else activity.getString(R.string.upd_usage_total, u.text(activity), u.human(u.totalBytes))
                 }
             }.start()
         }
         btn.setOnClickListener {
             btn.isEnabled = false
-            btn.text = "清理中…"
+            btn.text = activity.getString(R.string.upd_cleaning)
             Thread {
                 val freed = CacheMgr.clearAll(activity)
                 val u = CacheMgr.usage(activity)
                 activity.runOnUiThread {
-                    btn.text = if (freed > 0) "已释放 " + u.human(freed) else "本来就是干净的"
-                    detail.text = if (u.totalBytes <= 0) "没有可清理的缓存"
-                    else u.text() + " · 共 " + u.human(u.totalBytes)
-                    toast(activity, if (freed > 0) "已释放 " + u.human(freed) else "没有可清理的缓存")
+                    btn.text = if (freed > 0) activity.getString(R.string.upd_freed, u.human(freed)) else activity.getString(R.string.upd_already_clean)
+                    detail.text = if (u.totalBytes <= 0) activity.getString(R.string.upd_nothing_to_clean)
+                    else activity.getString(R.string.upd_usage_total, u.text(activity), u.human(u.totalBytes))
+                    toast(activity, if (freed > 0) activity.getString(R.string.upd_freed, u.human(freed)) else activity.getString(R.string.upd_nothing_to_clean))
                 }
             }.start()
         }
@@ -612,7 +610,7 @@ object ApkUpdater {
             ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (t: Throwable) {
-            toast(ctx, "打不开链接：" + url)
+            toast(ctx, ctx.getString(R.string.upd_open_link_fail, url))
         }
     }
 

@@ -78,7 +78,7 @@
         android:layout_marginEnd="32dp"
         android:gravity="center"
         android:lineSpacingExtra="6dp"
-        android:text="@string/empty"
+        android:text="@string/scan_empty"
         android:textColor="#7D8590"
         android:textSize="14sp"
         android:visibility="gone"
@@ -110,7 +110,7 @@
             android:layout_height="46dp"
             android:layout_weight="1"
             android:background="@drawable/bg_btn_outline"
-            android:text="@string/rescan"
+            android:text="@string/scan_rescan"
             android:textAllCaps="false"
             android:textColor="#D8DEE6"
             android:textSize="14sp" />
@@ -122,7 +122,7 @@
             android:layout_marginStart="10dp"
             android:layout_weight="1"
             android:background="@drawable/bg_btn_solid"
-            android:text="@string/manual"
+            android:text="@string/scan_manual"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="14sp" />
@@ -136,7 +136,7 @@
             android:layout_marginStart="10dp"
             android:layout_weight="1"
             android:background="@drawable/bg_btn_outline"
-            android:text="@string/update"
+            android:text="@string/scan_update"
             android:textAllCaps="false"
             android:textColor="#8AB4F8"
             android:textSize="14sp" />

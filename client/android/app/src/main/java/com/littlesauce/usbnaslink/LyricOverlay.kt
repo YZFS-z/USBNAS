@@ -228,7 +228,7 @@ class LyricOverlay(private val ctx: Context) {
 
     private fun applyText() {
         if (lrc.isEmpty()) {
-            put("（暂无歌词）", "")
+            put("", "", ctx.getString(R.string.play_lyrics_none))
             return
         }
         val first = lrc[0][1] as? String ?: ""
@@ -237,9 +237,13 @@ class LyricOverlay(private val ctx: Context) {
         lastIdx = 0
     }
 
-    private fun put(a: String, b: String) {
+    /**
+     * 画一行（或两行）歌词。[empty] 是第一行没内容时显示的占位 ——
+     * 正常滚动时空着只画一个音符，没有歌词时要说一句人话。
+     */
+    private fun put(a: String, b: String, empty: String = "♪") {
         ui.post {
-            line1?.text = if (a.isEmpty()) "♪" else a
+            line1?.text = if (a.isEmpty()) empty else a
             line2?.text = b
         }
     }

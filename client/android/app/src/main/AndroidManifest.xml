@@ -48,14 +48,14 @@
         <activity
             android:name=".LibraryActivity"
             android:exported="false"
-            android:label="@string/library"
+            android:label="@string/lib_library"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
 
         <!-- 管理设置：只有服务端认定是管理员才解锁，权限判定只此一处 -->
         <activity
             android:name=".AdminActivity"
             android:exported="false"
-            android:label="@string/admin"
+            android:label="@string/lib_admin"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize" />
 
@@ -82,7 +82,7 @@
         <activity
             android:name=".PdfActivity"
             android:exported="false"
-            android:label="@string/pdf_reader"
+            android:label="@string/pdf_activity_label"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
 
         <!--

@@ -1,22 +1,356 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    界面文案总表（中文原文）。
+
+    ## 为什么现在才建这张表
+
+    这个 App 最早是自己用的小工具，文案直接写在 Kotlin 里最省事。后来说要加
+    英文界面，才发现「把文案抽出来」和「写英文」其实是同一件事的两面：
+    没抽出来，翻译就无处安放。所以这里一次性补齐。
+
+    ## 命名规则
+
+    - 前缀按界面分：`scan_` 扫描页、`admin_` 管理页、`lib_` 媒体库、
+      `play_` 播放页、`book_` 阅读页、`pdf_` PDF 页、`video_` 视频页、
+      `set_` 设置卡片、`common_` 跨页面通用。
+    - 带参数的用位置占位符 `%1$s` / `%1$d`，不要在代码里拼字符串 ——
+      英文语序和中文不同，整句交给译文文件才能读通顺。
+    - 单独一个词的按钮（「刷新」）也单独一条，不要和标题共用：
+      英文里按钮常是动词、标题是名词，共用一条必然有一个别扭。
+
+    ## 没有抽进来的
+
+    - `Log.*` 里的中文：那是给开发者看的，用户看不到，留在代码里更好读。
+    - 服务端返回的中文（曲库统计、错误详情）：它们来自 NAS 那端，
+      跟 App 语言无关，硬翻会把「服务端说了什么」这件事弄丢。
+-->
 <resources>
     <string name="app_name">USBNAS Link</string>
+
+    <!-- ===== 通用 ===== -->
+    <string name="common_ok">确定</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_close">关闭</string>
+    <string name="common_save">保存</string>
+    <string name="common_refresh">刷新</string>
+    <string name="common_loading">正在读取…</string>
+    <string name="common_retry">重试</string>
+    <string name="common_unknown_error">未知错误</string>
+    <string name="common_no_response">没有响应</string>
+    <string name="common_connection">连接</string>
+    <string name="common_delete">删除</string>
+    <string name="common_cancel_all">取消全选</string>
+
+    <!-- ===== 扫描页 ===== -->
     <string name="scan_title">正在寻找 NAS</string>
     <string name="scan_hint">自动扫描当前局域网…</string>
-    <string name="rescan">重新扫描</string>
-    <string name="empty">没有找到 NAS\n确认手机和 NAS 在同一个 Wi-Fi 下</string>
-    <string name="manual">手动输入地址</string>
-    <string name="update">检查更新</string>
-    <string name="library">媒体库</string>
-    <string name="admin">管理设置</string>
-    <string name="pdf_reader">PDF 阅读</string>
-    <string name="lyric_scrape">刮削歌词</string>
-    <string name="desktop_lyric">桌面歌词</string>
-    <string name="connect">连接</string>
-    <string name="open_in_browser">用浏览器打开</string>
-    <string name="login_title">登录</string>
-    <string name="login_user">用户名</string>
-    <string name="login_pass">密码</string>
-    <string name="login_ok">登录</string>
-    <string name="login_cancel">取消</string>
+    <string name="scan_rescan">重新扫描</string>
+    <string name="scan_found_count">找到 %1$d 台</string>
+    <string name="scan_empty">没有找到 NAS\n确认手机和 NAS 在同一个 Wi-Fi 下</string>
+    <string name="scan_manual">手动输入地址</string>
+    <string name="scan_manual_hint">192.168.1.10 或 192.168.1.10:8080</string>
+    <string name="scan_connect_failed">连不上 %1$s</string>
+    <string name="scan_connect">连接</string>
+    <string name="scan_update">检查更新</string>
+
+    <!-- ===== 管理设置页 ===== -->
+    <string name="admin_title">管理设置</string>
+    <string name="admin_no_server">没有服务器地址</string>
+    <string name="admin_load_failed">读取失败：%1$s</string>
+    <string name="admin_cannot_reach">连不上服务端，或者它还不支持 /_admin/api。</string>
+    <string name="admin_need_admin">需要管理员账号</string>
+    <string name="admin_need_admin_hint">站点名称、音乐目录、影视目录是全局配置，只有管理员能改。先用管理员账号在网页端登录，再回到这里就会自动带上登录状态。</string>
+    <string name="admin_not_admin_toast">当前会话不是管理员</string>
+    <string name="admin_current_user">管理员：%1$s（%2$s）</string>
+    <string name="admin_current_user_not_admin">当前账号「%1$s」是%2$s，改设置需要管理员</string>
+    <string name="admin_switch_user">换管理员账号</string>
+    <string name="admin_go_login">去网页端登录</string>
+    <string name="admin_saved">%1$s 已保存（%2$s）</string>
+    <string name="admin_saved_ok">已生效</string>
+    <string name="admin_save_failed">%1$s 没保存：%2$s</string>
+    <string name="admin_save_prefix">保存%1$s</string>
+    <string name="admin_picked_paths">已选路径（保存的就是这里的每一行，也可以直接手改）</string>
+
+    <string name="admin_site_title">站点名称</string>
+    <string name="admin_site_title_hint">显示在浏览器标题栏和响应头里</string>
+    <string name="admin_site_title_note">最多 24 个字符；留空会用默认的「一只肥鼠的NAS」</string>
+    <string name="admin_music_dirs">音乐目录</string>
+    <string name="admin_music_dirs_note">客户端播放器只在这些目录里找歌；可以勾多个（盘0/音乐 + 盘1/音乐 各一部分）。点方框勾选，点文字展开。</string>
+    <string name="admin_video_dirs">影视目录</string>
+    <string name="admin_video_dirs_note">电影和电视剧可以分在不同盘里，客户端会按目录分块显示；海报和 .nfo 从视频同目录读。</string>
+    <string name="admin_book_dirs">图书目录</string>
+    <string name="admin_book_dirs_note">客户端「图书」页只显示这里的书。认 epub/pdf/mobi/azw3/fb2/djvu/cbz/cbr/txt/md；不配就是空书库（不会去扫全盘找书）。</string>
+
+    <!-- ===== 媒体库 ===== -->
+    <string name="lib_library">媒体库</string>
+    <string name="lib_admin">管理设置</string>
+    <string name="lib_tab_video">影视</string>
+    <string name="lib_tab_music">音乐</string>
+    <string name="lib_tab_book">图书</string>
+    <string name="lib_tab_photo">相册</string>
+    <string name="lib_tab_manage">管理设置</string>
+    <string name="lib_tab_web">网页</string>
+    <string name="lib_theme_to_day">日间</string>
+    <string name="lib_theme_to_night">夜间</string>
+    <string name="lib_theme_switched">已切到%1$s（三端同步）</string>
+    <string name="lib_theme_local_only">已切到%1$s · 服务端没存上：%2$s</string>
+    <string name="lib_theme_no_server">没连接，只改了这台手机</string>
+    <string name="lib_select_all">全选</string>
+    <string name="lib_photo_sel">已选 %1$d 张</string>
+    <string name="lib_photo_sel_full">取消全选</string>
+    <string name="lib_photo_loading">相册加载中…</string>
+    <string name="lib_hint_manage">服务器端：站点与四个库的目录 · 客户端：自动更新与缓存</string>
+    <string name="lib_hint_photo">相册 %1$d 张 · %2$d 个相册</string>
+    <string name="lib_hint_video">影视 %1$d 部 · %2$d 个目录</string>
+    <string name="lib_hint_music">音乐 %1$d 首 · %2$d 个目录</string>
+    <string name="lib_hint_music_artist">%1$s · 按歌手</string>
+    <string name="lib_hint_music_album">%1$s · 按专辑</string>
+    <string name="lib_hint_book">图书 %1$d 本 · %2$d 个书架</string>
+
+    <!-- 媒体库各页面的空状态与分组标题 -->
+    <string name="lib_all_failed">三个库都没取到：%1$s</string>
+    <string name="lib_empty_video">还没有影视。管理员在网页端「影视目录」里指一个目录就会出来。</string>
+    <string name="lib_group_videos">%1$d 部</string>
+    <string name="lib_group_other">其他</string>
+    <string name="lib_empty_music">还没有音乐。管理员在网页端「音乐目录」里指一个目录就会出来。</string>
+    <string name="lib_no_match">没有匹配「%1$s」的歌。</string>
+    <string name="lib_group_songs">%1$d 首</string>
+    <string name="lib_buckets">共 %1$d 个%2$s，点名字展开</string>
+    <string name="lib_music_view_flat">平铺</string>
+    <string name="lib_music_view_artist">按歌手</string>
+    <string name="lib_music_view_album">按专辑</string>
+    <string name="lib_search_hint">搜歌手 / 专辑 / 歌名（共 %1$d 首）</string>
+    <string name="lib_has_lyrics">有歌词</string>
+    <string name="lib_books_failed">书库取不到：%1$s</string>
+    <string name="lib_books_empty">还没有书库。管理员在网页端「图书目录」里指一个目录就会出来。</string>
+    <string name="lib_shelf_empty">书架上还没有书。</string>
+    <string name="lib_group_books">%1$d 本</string>
+    <string name="lib_photos_failed">相册取不到：%1$s</string>
+    <string name="lib_photos_empty">还没有相册。到「管理设置 → 相册目录」里指一个放照片的目录就会出来。</string>
+    <string name="lib_photos_dir_empty">相册目录里还没有图。</string>
+    <string name="lib_group_photos">%1$d 张</string>
+    <string name="lib_photos_summary">共 %1$d 张 · %2$d 个相册</string>
+    <string name="lib_del_confirm_title">删除 %1$d 张照片？</string>
+    <string name="lib_del_confirm_msg">会从 NAS 的磁盘上真的删掉（不进回收站）。这个操作不能撤销。</string>
+    <string name="lib_del_need_admin">删除需要管理员权限，先到上面「设置服务器端」里登录</string>
+    <string name="lib_del_running">正在删除 %1$d 张…</string>
+    <string name="lib_del_done">已删除 %1$d 张</string>
+    <string name="lib_del_partial">删了 %1$d 张，失败 %2$d 张：%3$s</string>
+    <string name="lib_photo_open_failed">这张图打不开：%1$s</string>
+
+    <!-- ===== 设置卡片 ===== -->
+    <string name="set_server_section">1 · 设置服务器端</string>
+    <string name="set_server_section_note">站点名称、四个库的目录、账号，都是存在服务端的全局配置，所有客户端共用；改它需要管理员账号。</string>
+    <string name="set_client_section">2 · 设置客户端</string>
+    <string name="set_client_section_note">下面这些只影响这台手机上的 App，不上传、不同步、改完立刻生效。</string>
+    <string name="set_language">语言 / Language</string>
+    <string name="set_language_note">切换后界面立刻重绘，不需要重启。</string>
+    <string name="set_storage">存储</string>
+    <string name="set_checking_login">正在确认登录状态…</string>
+    <string name="set_accounts">账号</string>
+    <string name="set_accounts_note">管理员能给所有人改目录；读写只能浏览和上传；只读只能看和下载。改密码会把这个人已登录的会话全踢下线。</string>
+    <string name="set_accounts_need_admin">需要管理员账号才能管理账号。</string>
+    <string name="set_accounts_old_server">服务端没返回账号列表（可能是旧版本）。网页端 /_admin 底部仍可管理。</string>
+    <string name="set_new_account">新建账号</string>
+    <string name="set_account_name">账号（字母数字）</string>
+    <string name="set_password">密码</string>
+    <string name="set_create_account">创建账号</string>
+    <string name="set_need_name_pw">账号和密码都要填</string>
+    <string name="set_you_badge">当前</string>
+    <string name="set_level_unknown">未知等级</string>
+    <string name="set_scoped"> · 限定目录</string>
+    <string name="set_online"> · 在线 %1$d 台</string>
+    <string name="set_offline"> · 未在线</string>
+    <string name="set_that_is_you"> · 就是你自己</string>
+    <string name="set_change_level">改等级</string>
+    <string name="set_change_pw">改密码</string>
+    <string name="set_kick">踢下线</string>
+    <string name="set_level_title">「%1$s」的等级</string>
+    <string name="set_new_pw">新密码</string>
+    <string name="set_pw_title">给「%1$s」改密码</string>
+    <string name="set_pw_msg">改完这个账号已登录的地方会全部掉线，要用新密码重新登。</string>
+    <string name="set_pw_do">改</string>
+    <string name="set_pw_empty">密码不能为空</string>
+    <string name="set_kick_title">让「%1$s」下线？</string>
+    <string name="set_kick_msg">账号还在，但已经登录的 %1$d 个会话会立刻失效，下次请求要重新登录。</string>
+    <string name="set_del_title">删除账号「%1$s」？</string>
+    <string name="set_del_msg">这个操作不能撤销；他上传过的文件不会跟着删。</string>
+    <string name="set_op_add">建号</string>
+    <string name="set_op_pw">改密码</string>
+    <string name="set_op_level">改等级</string>
+    <string name="set_op_kick">踢下线</string>
+    <string name="set_op_del">删除</string>
+    <string name="set_op_ok">%1$s 成功</string>
+    <string name="set_op_fail">%1$s 没成功：%2$s</string>
+    <string name="set_level_read">只读 · 浏览下载</string>
+    <string name="set_level_write">读写 · 浏览播放上传</string>
+    <string name="set_level_admin">管理员 · 全部权限</string>
+    <string name="set_refreshing">正在刷新…</string>
+    <string name="set_refresh_failed">刷新失败：%1$s</string>
+    <string name="set_refreshed_admin">已刷新：管理员「%1$s」</string>
+    <string name="set_refreshed_user">已刷新：账号「%1$s」（%2$s），不是管理员</string>
+    <string name="set_refreshed_anon">已刷新：服务端看不到登录态，需要重新登录</string>
+    <string name="set_cannot_reach">连不上服务端：%1$s</string>
+    <string name="set_logged_admin">已登录：管理员 %1$s（%2$s）</string>
+    <string name="set_logged_user">已登录：%1$s（%2$s）· 改配置需要管理员</string>
+    <string name="set_logged_out">未登录（会话已过期或从未登录）</string>
+    <string name="set_config_failed">读不到服务端配置：%1$s（多半是它还不支持 /_admin/api）</string>
+    <string name="set_need_admin_user">当前账号「%1$s」是%2$s，改设置需要管理员。</string>
+    <string name="set_need_admin_login">还没登录，或者登录已过期；改设置需要管理员账号。</string>
+    <string name="admin_book_dirs_note_short">「图书」页只显示这里的书；不配就是空书库（不会去扫全盘找 txt）。</string>
+    <string name="admin_photo_dirs">相册目录</string>
+    <string name="admin_photo_dirs_note">「相册」页只显示这里的图。认 jpg/jpeg/png/webp/bmp/gif/heic；不配就没有相册。</string>
+
+    <!-- ===== 播放页 ===== -->
+    <string name="play_seek_hint">拖动进度条可跳转（部分格式解不了就自动跳下一首）</string>
+    <string name="play_prev">上一首</string>
+    <string name="play_next">下一首</string>
+    <string name="play_play">播放</string>
+    <string name="play_pause">暂停</string>
+    <string name="play_ready">就绪</string>
+    <string name="play_mode_seq">顺序</string>
+    <string name="play_mode_all">列表循环</string>
+    <string name="play_mode_one">单曲循环</string>
+    <string name="play_mode_shuffle">随机</string>
+    <string name="play_at_first">已经是第一首</string>
+    <string name="play_at_last">已经是最后一首</string>
+    <string name="play_track_line">第 %1$d/%2$d 首 · %3$s</string>
+    <string name="play_no_lyrics">无歌词</string>
+    <string name="play_lyrics_loading">（正在加载歌词…）</string>
+    <string name="play_lyrics_none">（暂无歌词）</string>
+    <string name="play_lyrics_none_scrape">（这首没歌词，点「刮削歌词」找一份）</string>
+    <string name="play_not_started">还没开始播放</string>
+    <string name="play_scrape">刮削歌词</string>
+    <string name="play_searching">搜索中…</string>
+    <string name="play_saving">保存中…</string>
+    <string name="play_search_fail">搜不到：%1$s</string>
+    <string name="play_search_empty">没有匹配「%1$s」的歌词</string>
+    <string name="play_search_none">没搜到「%1$s」</string>
+    <string name="play_pick_lyrics">选一份歌词</string>
+    <string name="play_overwrite">覆盖同名</string>
+    <string name="play_search_word">搜索词…</string>
+    <string name="play_search_hint">歌手 歌名</string>
+    <string name="play_search_title">用关键词搜</string>
+    <string name="play_search">搜索</string>
+    <string name="play_need_login_write">先登录一次再刮削：写歌词要用有写权限的账号</string>
+    <string name="play_login_expired">登录已过期（服务端重启过），请回网页端重新登录后再刮削</string>
+    <string name="play_save_fail_login">没存上：%1$s（多半是登录已过期，重新登录后再试）</string>
+    <string name="play_save_fail">没存上：%1$s</string>
+    <string name="play_saved">已保存 %1$s（%2$d 字节）</string>
+    <string name="play_saved_toast">歌词已保存：%1$s</string>
+    <string name="play_overlay_on">桌面歌词</string>
+    <string name="play_overlay_off">关闭歌词</string>
+    <string name="play_overlay_on_done">桌面歌词已开，可拖动上下移动</string>
+    <string name="play_overlay_off_done">桌面歌词已关</string>
+    <string name="play_need_overlay_perm">需要「显示在其他应用上层」权限</string>
+    <string name="play_overlay_perm_how">请在系统设置 → 应用 → 特殊权限里打开悬浮窗</string>
+    <string name="play_overlay_failed">浮窗打不开（权限被拒或系统限制）</string>
+
+    <!-- ===== 主题按钮 ===== -->
+    <string name="theme_switched">已切到%1$s（三端同步）</string>
+    <string name="theme_switched_fail">已切到%1$s · 服务端没存上：%2$s</string>
+    <string name="theme_local_only">已切到%1$s · 没连服务器，只改了这台手机</string>
+
+    <!-- ===== 视频播放 ===== -->
+    <string name="video_title">视频</string>
+    <string name="video_back15">后退 15s</string>
+    <string name="video_fwd15">前进 15s</string>
+    <string name="video_other_player">用其它播放器</string>
+    <string name="video_start_fail">起播失败：%1$s</string>
+    <string name="video_embedded">%1$d×%2$d    ·    内嵌播放</string>
+    <string name="video_decode_fail">解码失败（what=%1$d extra=%2$d）</string>
+    <string name="video_ended">播放结束</string>
+    <string name="video_no_decoder_hint">这个格式系统解码器放不了，试试「用其它播放器」</string>
+    <string name="video_no_player">没有能播放这个格式的播放器</string>
+
+    <!-- ===== 阅读 ===== -->
+    <string name="book_title">阅读</string>
+    <string name="book_reading">正在读取…</string>
+    <string name="book_read_fail">读取失败</string>
+    <string name="book_web">网页</string>
+    <string name="book_pdf_opening">PDF：正在打开内嵌阅读器</string>
+    <string name="book_cannot_open">打不开</string>
+    <string name="book_open_in_app">在 App 里打开（PDFium）</string>
+    <string name="book_open_external_pdf">用设备上的 PDF 阅读器打开</string>
+    <string name="book_no_app">设备上没有能打开这个格式的应用</string>
+
+    <!-- ===== PDF ===== -->
+    <string name="pdf_opening">正在打开…</string>
+    <string name="pdf_last_page">末页</string>
+    <string name="pdf_empty_url">地址为空</string>
+    <string name="pdf_fetching">正在取文件…</string>
+    <string name="pdf_fetching_pct">正在取文件… %1$d%%</string>
+    <string name="pdf_fetch_fail">取文件失败：%1$s</string>
+    <string name="pdf_no_cache_dir">建不了缓存目录</string>
+    <string name="pdf_too_small">文件太小，可能不是 PDF</string>
+    <string name="pdf_cache_write_fail">缓存写入失败</string>
+    <string name="pdf_parsing">正在解析…</string>
+    <string name="pdf_pages">%1$d 页 · 内嵌渲染（PDFium）</string>
+    <string name="pdf_open_fail">打不开这份 PDF：%1$s</string>
+    <string name="pdf_open_other_app">用设备上的其它应用打开</string>
+    <string name="pdf_no_app">设备上没有能打开 PDF 的应用</string>
+
+    <!-- ===== 内嵌网页 ===== -->
+    <string name="browse_no_url">没有可用的 NAS 地址</string>
+    <string name="browse_open_fail">打不开 %1$s\n%2$s</string>
+
+    <!-- ===== 目录树 ===== -->
+    <string name="dirtree_hint">一行一个目录，例如\n/storage/emulated/0/Music\n/mnt/media_rw/XXXX/Movies</string>
+    <string name="dirtree_candidates">候选目录</string>
+    <string name="dirtree_no_candidates">服务端没列出候选目录，直接在下面的框里手写路径也行。</string>
+    <string name="dirtree_nothing_picked">还没选目录。点右上「显示全部目录」挑一个，或者直接在下面的框里写路径。</string>
+    <string name="dirtree_count">目录树 · 已选 %1$d 个</string>
+    <string name="dirtree_showing_all">（显示全部）</string>
+    <string name="dirtree_showing_picked">（只显示已选）</string>
+    <string name="dirtree_show_picked">只看已选</string>
+    <string name="dirtree_show_all">显示全部目录</string>
+    <string name="dirtree_configured_missing">  · 已配置（候选里没有）</string>
+    <string name="dirtree_internal">内部存储</string>
+    <string name="dirtree_external">外部盘 %1$s</string>
+    <string name="dirtree_storage_n">存储 %1$d</string>
+
+    <!-- ===== 客户端自动更新 ===== -->
+    <string name="upd_check_fail">检查失败：%1$s</string>
+    <string name="upd_latest">已经是最新版本（%1$s）</string>
+    <string name="upd_skipped_ver">这个版本（%1$s）已被你跳过</string>
+    <string name="upd_found">发现新版本 %1$s</string>
+    <string name="upd_current">当前 %1$s → %2$s%3$s</string>
+    <string name="upd_install_note">下载完会打开系统安装器；覆盖安装，已保存的服务器列表与设置都不动。</string>
+    <string name="upd_later">稍后</string>
+    <string name="upd_skip">跳过此版本</string>
+    <string name="upd_no_more">以后不再提示 %1$s</string>
+    <string name="upd_go">下载并安装</string>
+    <string name="upd_connecting">连接中…</string>
+    <string name="upd_downloading">正在下载 %1$s</string>
+    <string name="upd_incomplete">下载不完整</string>
+    <string name="upd_download_fail">下载失败：%1$s</string>
+    <string name="upd_no_installer">打不开安装器：%1$s，安装包在 %2$s</string>
+    <string name="upd_title">自动更新</string>
+    <string name="upd_check_online">联网检查新版本</string>
+    <string name="upd_check_note">当前 %1$s。打开后每次启动最多查一次 GitHub Release（间隔不少于 6 小时）；关掉就一个请求都不发。</string>
+    <string name="upd_check_now">立即检查</string>
+    <string name="upd_unskip">不再跳过 %1$s</string>
+    <string name="upd_skip_cleared">已清除跳过标记</string>
+    <string name="upd_about">关于</string>
+    <string name="upd_k_version">版本</string>
+    <string name="upd_k_last_check">上次检查</string>
+    <string name="upd_never_checked">从未检查</string>
+    <string name="upd_k_releases">发布页</string>
+    <string name="upd_open_releases">打开发布页</string>
+    <string name="upd_open_link_fail">打不开链接：%1$s</string>
+    <string name="upd_counting">统计中…</string>
+    <string name="upd_storage_note">PDF 只留最近几本，安装包装完就不再保留；网页缓存不动，删了会丢滚动位置和登录态。</string>
+    <string name="upd_clean_now">立即清理</string>
+    <string name="upd_cleaning">清理中…</string>
+    <string name="upd_nothing_to_clean">没有可清理的缓存</string>
+    <string name="upd_already_clean">本来就是干净的</string>
+    <string name="upd_freed">已释放 %1$s</string>
+    <string name="upd_usage_total">%1$s · 共 %2$s</string>
+    <string name="upd_cache_text">PDF %1$s（%2$d 个） · 安装包 %3$s（%4$d 个）</string>
+
+    <!-- ===== 启动器里的入口 ===== -->
+    <string name="launch_library">媒体库</string>
+    <string name="launch_admin">管理设置</string>
+    <string name="pdf_activity_label">PDF 阅读</string>
+    <string name="launch_pdf">PDF 阅读</string>
 </resources>

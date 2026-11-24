@@ -62,6 +62,8 @@ class AdminActivity : android.app.Activity() {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         baseUrl = intent.getStringExtra(EXTRA_URL) ?: ""
         sid = intent.getStringExtra(EXTRA_SID)
 
@@ -84,13 +86,13 @@ class AdminActivity : android.app.Activity() {
             setOnClickListener { finish() }
         })
         bar.addView(TextView(this).apply {
-            text = "管理设置"
+            text = getString(R.string.admin_title)
             textSize = 17f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#E6E9EF"))
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bar.addView(TextView(this).apply {
-            text = "刷新"
+            text = getString(R.string.common_refresh)
             textSize = 13f
             setTextColor(Color.parseColor("#5AA9FF"))
             setPadding(dp(12), dp(6), dp(12), dp(6))
@@ -106,7 +108,7 @@ class AdminActivity : android.app.Activity() {
         })
 
         stateText = TextView(this).apply {
-            text = "正在读取…"
+            text = getString(R.string.common_loading)
             textSize = 12f
             setTextColor(Color.parseColor("#9AA4B2"))
             setPadding(dp(16), 0, dp(16), dp(8))
@@ -144,6 +146,8 @@ class AdminActivity : android.app.Activity() {
         setContentView(root)
         // 状态栏/手势栏透明，看到的永远是 root 的 #0E1116（详见 Immersive.tintBars）
         Immersive.tintBars(this, Color.parseColor("#0E1116"))
+        // 铺满之后内容从 (0,0) 起算，顶栏要自己让出状态栏和挖孔
+        Immersive.padBySystemBars(root)
         load()
     }
 
@@ -156,7 +160,7 @@ class AdminActivity : android.app.Activity() {
 
     private fun load() {
         if (baseUrl.isEmpty()) {
-            stateText.text = "没有服务器地址"
+            stateText.text = getString(R.string.admin_no_server)
             return
         }
         spinner.visibility = View.VISIBLE
@@ -184,23 +188,22 @@ class AdminActivity : android.app.Activity() {
         bookTree = null
 
         if (!st.ok) {
-            stateText.text = "读取失败：${st.error ?: "没有响应"}"
-            body.addView(note("连不上服务端，或者它还不支持 /_admin/api。", "#FF8A94"))
+            stateText.text = getString(R.string.admin_load_failed, st.error ?: getString(R.string.common_no_response))
+            body.addView(note(getString(R.string.admin_cannot_reach), "#FF8A94"))
             return
         }
         admin = st.admin
         if (!st.admin) {
             stateText.text = if (st.logged)
-                "当前账号「${st.who}」是${st.levelName}，改设置需要管理员"
+                getString(R.string.admin_current_user_not_admin, st.who ?: "?", st.levelName ?: "?")
             else
-                "需要管理员账号"
+                getString(R.string.admin_need_admin)
             body.addView(note(
-                "站点名称、音乐目录、影视目录是全局配置，只有管理员能改。" +
-                    "先用管理员账号在网页端登录，再回到这里就会自动带上登录状态。",
+                getString(R.string.admin_need_admin_hint),
                 "#9AA4B2"
             ))
             val b = Button(this).apply {
-                text = if (st.logged) "换管理员账号" else "去网页端登录"
+                text = getString(if (st.logged) R.string.admin_switch_user else R.string.admin_go_login)
                 isAllCaps = false
                 setTextColor(Color.WHITE)
                 backgroundTintList = null
@@ -216,14 +219,14 @@ class AdminActivity : android.app.Activity() {
             return
         }
 
-        stateText.text = "管理员：${st.who}（${st.levelName}）"
+        stateText.text = getString(R.string.admin_current_user, st.who ?: "?", st.levelName ?: "?")
 
         // ---- 站点名称
         titleBox = EditText(this).apply {
             setText(st.title ?: "")
             setTextColor(Color.parseColor("#E6E9EF"))
             setHintTextColor(Color.parseColor("#5E6A7A"))
-            hint = "显示在浏览器标题栏和响应头里"
+            hint = getString(R.string.admin_site_title_hint)
             inputType = InputType.TYPE_CLASS_TEXT
             textSize = 15f
             setSingleLine()
@@ -231,35 +234,39 @@ class AdminActivity : android.app.Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         section(
-            "站点名称",
-            "最多 24 个字符；留空会用默认的「一只肥鼠的NAS」",
-            titleBox!!, null, { save("title", "站点名称", titleBox?.text?.toString() ?: "") }
+            getString(R.string.admin_site_title),
+            getString(R.string.admin_site_title_note),
+            titleBox!!, null,
+            { save("title", getString(R.string.admin_site_title), titleBox?.text?.toString() ?: "") }
         ).let { body.addView(it.first); saveTitle = it.second }
 
         // ---- 音乐目录
         musicTree = DirTree(this).apply { setPaths(st.musicDirs ?: emptyList()) }
         section(
-            "音乐目录",
-            "客户端播放器只在这些目录里找歌；可以勾多个（盘0/音乐 + 盘1/音乐 各一部分）。点方框勾选，点文字展开。",
-            null, musicTree, { save("music", "音乐目录", musicTree?.checkedPaths()?.joinToString("\n") ?: "") }
+            getString(R.string.admin_music_dirs),
+            getString(R.string.admin_music_dirs_note),
+            null, musicTree,
+            { save("music", getString(R.string.admin_music_dirs), musicTree?.checkedPaths()?.joinToString("\n") ?: "") }
         ).let { body.addView(it.first); saveMusic = it.second }
         musicTree!!.rebuild(st.choices ?: emptyList(), st.musicDirs ?: emptyList())
 
         // ---- 影视目录
         videoTree = DirTree(this).apply { setPaths(st.videoDirs ?: emptyList()) }
         section(
-            "影视目录",
-            "电影和电视剧可以分在不同盘里，客户端会按目录分块显示；海报和 .nfo 从视频同目录读。",
-            null, videoTree, { save("video", "影视目录", videoTree?.checkedPaths()?.joinToString("\n") ?: "") }
+            getString(R.string.admin_video_dirs),
+            getString(R.string.admin_video_dirs_note),
+            null, videoTree,
+            { save("video", getString(R.string.admin_video_dirs), videoTree?.checkedPaths()?.joinToString("\n") ?: "") }
         ).let { body.addView(it.first); saveVideo = it.second }
         videoTree!!.rebuild(st.choices ?: emptyList(), st.videoDirs ?: emptyList())
 
         // ---- 图书目录
         bookTree = DirTree(this).apply { setPaths(st.bookDirs ?: emptyList()) }
         section(
-            "图书目录",
-            "客户端「图书」页只显示这里的书。认 epub/pdf/mobi/azw3/fb2/djvu/cbz/cbr/txt/md；不配就是空书库（不会去扫全盘找书）。",
-            null, bookTree, { save("book", "图书目录", bookTree?.checkedPaths()?.joinToString("\n") ?: "") }
+            getString(R.string.admin_book_dirs),
+            getString(R.string.admin_book_dirs_note),
+            null, bookTree,
+            { save("book", getString(R.string.admin_book_dirs), bookTree?.checkedPaths()?.joinToString("\n") ?: "") }
         ).let { body.addView(it.first); saveBook = it.second }
         bookTree!!.rebuild(st.choices ?: emptyList(), st.bookDirs ?: emptyList())
 
@@ -270,7 +277,7 @@ class AdminActivity : android.app.Activity() {
 
     private fun save(action: String, label: String, value: String) {
         if (!admin) {
-            Toast.makeText(this, "当前会话不是管理员", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.admin_not_admin_toast), Toast.LENGTH_SHORT).show()
             return
         }
         spinner.visibility = View.VISIBLE
@@ -292,7 +299,8 @@ class AdminActivity : android.app.Activity() {
                 spinner.visibility = View.GONE
                 Toast.makeText(
                     this@AdminActivity,
-                    if (r.ok) "$label 已保存（${r.msg ?: "已生效"}）" else "$label 没保存：${r.error ?: "未知错误"}",
+                    if (r.ok) getString(R.string.admin_saved, label, r.msg ?: getString(R.string.admin_saved_ok))
+                    else getString(R.string.admin_save_failed, label, r.error ?: getString(R.string.common_unknown_error)),
                     if (r.ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                 ).show()
                 if (r.ok) load()
@@ -344,7 +352,7 @@ class AdminActivity : android.app.Activity() {
                 ).apply { topMargin = dp(4) }
             )
             box.addView(TextView(this).apply {
-                text = "已选路径（保存的就是这里的每一行，也可以直接手改）"
+                text = getString(R.string.admin_picked_paths)
                 textSize = 11f
                 setTextColor(Color.parseColor("#7D8590"))
                 setPadding(0, dp(8), 0, dp(4))
@@ -354,7 +362,7 @@ class AdminActivity : android.app.Activity() {
             ))
         }
         val btn = Button(this).apply {
-            text = "保存$title"
+            text = getString(R.string.admin_save_prefix, title)
             textSize = 14f
             isAllCaps = false
             setTextColor(Color.WHITE)

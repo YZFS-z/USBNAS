@@ -43,7 +43,7 @@ class DirTree(private val ctx: Context) {
     private val area = EditText(ctx).apply {
         setTextColor(Color.parseColor("#C9D4E2"))
         setHintTextColor(Color.parseColor("#5E6A7A"))
-        hint = "一行一个目录，例如\n/storage/emulated/0/Music\n/mnt/media_rw/XXXX/Movies"
+        hint = ctx.getString(R.string.dirtree_hint)
         setTypeface(Typeface.MONOSPACE)
         textSize = 11f
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
@@ -97,7 +97,7 @@ class DirTree(private val ctx: Context) {
     /** 用服务端候选 + 当前配置重建整棵树 */
     fun rebuild(choices: List<Admin.DirChoice>, current: List<String>) {
         val conf = LinkedHashSet(current.map { norm(it) }.filter { it.isNotEmpty() })
-        top = Row(Node("", "候选目录", true))
+        top = Row(Node("", ctx.getString(R.string.dirtree_candidates), true))
 
         val roots = LinkedHashMap<String, Row>()
         val dirs = LinkedHashMap<String, Row>()
@@ -190,9 +190,9 @@ class DirTree(private val ctx: Context) {
             val none = top.children.isEmpty()
             host.addView(TextView(ctx).apply {
                 text = if (none)
-                    "服务端没列出候选目录，直接在下面的框里手写路径也行。"
+                    ctx.getString(R.string.dirtree_no_candidates)
                 else
-                    "还没选目录。点右上「显示全部目录」挑一个，或者直接在下面的框里写路径。"
+                    ctx.getString(R.string.dirtree_nothing_picked)
                 textSize = 11f
                 setTextColor(Color.parseColor("#7D8590"))
                 setPadding(dp(4), dp(8), dp(4), dp(8))
@@ -209,12 +209,12 @@ class DirTree(private val ctx: Context) {
         }
         val n = countChecked(top)
         bar.addView(TextView(ctx).apply {
-            text = "目录树 · 已选 $n 个" + if (showAll) "（显示全部）" else "（只显示已选）"
+            text = ctx.getString(R.string.dirtree_count, n) + if (showAll) ctx.getString(R.string.dirtree_showing_all) else ctx.getString(R.string.dirtree_showing_picked)
             textSize = 11f
             setTextColor(Color.parseColor("#9AA4B2"))
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bar.addView(TextView(ctx).apply {
-            text = if (showAll) "只看已选" else "显示全部目录"
+            text = if (showAll) ctx.getString(R.string.dirtree_show_picked) else ctx.getString(R.string.dirtree_show_all)
             textSize = 11f
             setTextColor(Color.parseColor("#5AA9FF"))
             setPadding(dp(10), dp(4), dp(4), dp(4))
@@ -283,7 +283,7 @@ class DirTree(private val ctx: Context) {
             text = buildString {
                 append(r.node.label)
                 if (r.node.configuredOnly) {
-                    append("  · 已配置（候选里没有）")
+                    append(ctx.getString(R.string.dirtree_configured_missing))
                 } else if (r.node.root) {
                     append("  ")
                     append(r.node.path)
@@ -378,9 +378,9 @@ class DirTree(private val ctx: Context) {
     }
 
     private fun labelOfRoot(key: String, serverLabel: String?, seq: Int): String = when {
-        key.startsWith("/storage/emulated/") -> "内部存储"
-        key.startsWith("/mnt/media_rw/") -> "外部盘 " + split(key).last()
-        serverLabel.isNullOrEmpty() -> "存储 ${seq + 1}"
+        key.startsWith("/storage/emulated/") -> ctx.getString(R.string.dirtree_internal)
+        key.startsWith("/mnt/media_rw/") -> ctx.getString(R.string.dirtree_external, split(key).last())
+        serverLabel.isNullOrEmpty() -> ctx.getString(R.string.dirtree_storage_n, seq + 1)
         else -> serverLabel
     }
 

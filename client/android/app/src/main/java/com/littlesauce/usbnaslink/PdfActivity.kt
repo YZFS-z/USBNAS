@@ -81,6 +81,8 @@ class PdfActivity : Activity() {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         baseUrl = intent.getStringExtra(EXTRA_URL) ?: ""
         sid = intent.getStringExtra(EXTRA_SID)
         path = intent.getStringExtra(EXTRA_PATH) ?: ""
@@ -126,7 +128,7 @@ class PdfActivity : Activity() {
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
         metaText = TextView(this).apply {
-            text = "正在打开…"
+            text = getString(R.string.pdf_opening)
             setTextColor(Color.parseColor("#7D8590"))
             textSize = 10f
         }
@@ -187,7 +189,7 @@ class PdfActivity : Activity() {
         })
         jump.addView(seek, LinearLayout.LayoutParams(0, dp(40), 1f))
         val lastBtn = TextView(this).apply {
-            text = "末页"
+            text = getString(R.string.pdf_last_page)
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#5AA9FF"))
             textSize = 11f
@@ -209,11 +211,11 @@ class PdfActivity : Activity() {
 
     private fun open() {
         if (baseUrl.isEmpty() || path.isEmpty()) {
-            fail("地址为空")
+            fail(getString(R.string.pdf_empty_url))
             return
         }
         spinner.visibility = View.VISIBLE
-        metaText.text = "正在取文件…"
+        metaText.text = getString(R.string.pdf_fetching)
         // PDFium 要能随机 seek（读 xref、跳页），必须拿到一个可重复读的来源。
         // 不能直接 fromUri(http://…)：那走的是 ContentResolver，只认 content:// 和
         // file://，会抛「No content provider: http://…」。所以自己拉一遍存到
@@ -229,7 +231,7 @@ class PdfActivity : Activity() {
                 val msg = e.message ?: e.javaClass.simpleName
                 ui.post {
                     spinner.visibility = View.GONE
-                    fail("取文件失败：$msg")
+                    fail(getString(R.string.pdf_fetch_fail, msg))
                 }
             }
         }
@@ -254,7 +256,7 @@ class PdfActivity : Activity() {
         }
         val total = conn.contentLengthLong
         val dir = java.io.File(cacheDir, "pdf")
-        if (!dir.isDirectory && !dir.mkdirs()) throw java.io.IOException("建不了缓存目录")
+        if (!dir.isDirectory && !dir.mkdirs()) throw java.io.IOException(getString(R.string.pdf_no_cache_dir))
         // 文件名用路径的哈希，同一本书重复打开能直接复用
         val out = java.io.File(dir, Integer.toHexString(path.hashCode()) + ".pdf")
         val tmp = java.io.File(dir, out.name + ".part")
@@ -269,7 +271,7 @@ class PdfActivity : Activity() {
                     done += n
                     if (total > 0) {
                         val pct = (done * 100 / total).toInt()
-                        if (pct % 2 == 0) ui.post { metaText.text = "正在取文件… $pct%" }
+                        if (pct % 2 == 0) ui.post { metaText.text = getString(R.string.pdf_fetching_pct, pct) }
                     }
                 }
             }
@@ -277,10 +279,10 @@ class PdfActivity : Activity() {
         conn.disconnect()
         if (tmp.length() < 1024) {
             tmp.delete()
-            throw java.io.IOException("文件太小，可能不是 PDF")
+            throw java.io.IOException(getString(R.string.pdf_too_small))
         }
         if (out.exists()) out.delete()
-        if (!tmp.renameTo(out)) throw java.io.IOException("缓存写入失败")
+        if (!tmp.renameTo(out)) throw java.io.IOException(getString(R.string.pdf_cache_write_fail))
         // 刚写完就裁一次：keep 传自己，别人（包括这本旧的一份）可以淘汰。
         // 放在下载线程里做，别占 UI 线程 —— 目录里可能有几十个文件要 stat。
         CacheMgr.trimPdf(this, out)
@@ -289,7 +291,7 @@ class PdfActivity : Activity() {
 
     private fun render(file: java.io.File) {
         try {
-            metaText.text = "正在解析…"
+            metaText.text = getString(R.string.pdf_parsing)
             // 不调 pages(...)：这个重载要 IntArray，而空数组会被它当成
             // 「一页都不要」而不是「全部页面」。契约就是「不写 pages 即全部」。
             pdfView.fromFile(file)
@@ -308,7 +310,7 @@ class PdfActivity : Activity() {
                         ui.post {
                             pageCount = nbPages
                             spinner.visibility = View.GONE
-                            metaText.text = "$nbPages 页 · 内嵌渲染（PDFium）"
+                            metaText.text = getString(R.string.pdf_pages, nbPages)
                             pageText.text = "${lastPage + 1}/$nbPages"
                             // 滑块范围对齐页数：之前固定 max=100，而这本书是 467 页，
                             // 滑到头也只能到第 101 页，看起来像「翻页坏了」。
@@ -327,14 +329,14 @@ class PdfActivity : Activity() {
                     override fun onError(t: Throwable?) {
                         ui.post {
                             spinner.visibility = View.GONE
-                            fail("打不开这份 PDF：" + (t?.message ?: "未知错误"))
+                            fail(getString(R.string.pdf_open_fail, t?.message ?: getString(R.string.common_unknown_error)))
                         }
                     }
                 })
                 .load()
         } catch (e: Throwable) {
             spinner.visibility = View.GONE
-            fail("打不开这份 PDF：" + (e.message ?: e.javaClass.simpleName))
+            fail(getString(R.string.pdf_open_fail, e.message ?: e.javaClass.simpleName))
         }
     }
 
@@ -347,7 +349,7 @@ class PdfActivity : Activity() {
     private fun pdfUrl(): String = BookLib.fileUrl(baseUrl, path)
 
     private fun fail(msg: String) {
-        metaText.text = "打不开"
+        metaText.text = getString(R.string.book_cannot_open)
         metaText.setTextColor(Color.parseColor("#FF8A94"))
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         // 渲染不出来时给一条退路：系统里可能有别的 PDF 阅读器
@@ -363,7 +365,7 @@ class PdfActivity : Activity() {
             setPadding(0, 0, 0, dp(8))
         })
         row.addView(TextView(this).apply {
-            text = "用设备上的其它应用打开"
+            text = getString(R.string.pdf_open_other_app)
             setTextColor(Color.parseColor("#E6E9EF"))
             textSize = 14f
             gravity = Gravity.CENTER
@@ -382,7 +384,7 @@ class PdfActivity : Activity() {
                 setDataAndType(android.net.Uri.parse(pdfUrl()), "application/pdf")
             })
         } catch (e: Throwable) {
-            Toast.makeText(this, "设备上没有能打开 PDF 的应用", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.pdf_no_app), Toast.LENGTH_LONG).show()
         }
     }
 

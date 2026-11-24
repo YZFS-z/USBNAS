@@ -129,6 +129,20 @@ object Immersive {
     fun tintBars(activity: Activity, bgColor: Int) {
         val win = activity.window ?: return
         val decor = win.decorView ?: return
+        // ---- 铺到挖孔里 ----
+        // 默认情况下系统不许窗口画到 cutout 区域，横屏时屏幕左侧会空出 104px
+        // （`mAppBounds=Rect(104, 0 - 2400, 1036)`、`Requested w=2296`）。
+        // 把这 104px 让出去之后，窗口 frame 才是真正的 [0,0][2400,1080]，
+        // 状态栏底下看到的才是页面自己的底色，而不是系统画的一条黑边。
+        //
+        // SHORT_EDGES 只在「短边」允许延伸，正好是竖屏的顶边和横屏的左边；
+        // 不用 ALWAYS 是因为转屏动画中途 ALWAYS 会连凹口侧边一起吞掉内容。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            win.attributes = win.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         win.statusBarColor = android.graphics.Color.TRANSPARENT
         win.navigationBarColor = android.graphics.Color.TRANSPARENT
         win.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
@@ -170,6 +184,91 @@ object Immersive {
         val g = ((color shr 8) and 0xFF) / 255f
         val b = (color and 0xFF) / 255f
         return 0.2126f * r + 0.7152f * g + 0.0722f * b
+    }
+
+    /**
+     * 把系统栏让出来的那部分空间，转成根布局需要补的 padding。
+     *
+     * ## 为什么必须补
+     *
+     * 用了 `setDecorFitsSystemWindows(false)` 之后，窗口铺满整块屏（含挖孔区），
+     * 但**内容坐标系也跟着挪到了 (0,0)**。原来窗口从 y=104 开始，现在从 y=0 开始 ——
+     * 顶栏第一行会被状态栏的时间/电量压住，横向时最左边 104px 被挖孔吃掉。
+     *
+     * 所以「铺满」必须配「补 padding」：铺满是让背景色铺过去，补 padding 是让
+     * 内容回到安全区。两者缺一个就是要么一条黑边、要么文字被挡。
+     *
+     * ## 回来的值
+     *
+     * `systemBars` —— 状态栏 + 手势栏（不含挖孔）。
+     * `displayCutout` —— 挖孔/刘海本身。`safe` 是它相对**已消费 inset** 的剩余部分，
+     * 服务端给的 104 在 `systemBars.top` 里已经算进去了，所以取 `safe` 不会重复计算；
+     * 只有在「横屏挖孔在左、状态栏在上」这种组合下，`safe.left` 才会有非零值 ——
+     * 那正是原来空着的那一条。
+     *
+     * @return `IntArray(4)` = left / top / right / bottom（像素）
+     */
+    fun paddings(activity: Activity): IntArray {
+        val decor = activity.window?.decorView ?: return IntArray(4)
+        val ins = decor.rootWindowInsets ?: return IntArray(4)
+        var l = 0
+        var t = 0
+        var r = 0
+        var b = 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bars = ins.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            l = bars.left; t = bars.top; r = bars.right; b = bars.bottom
+            val safe = ins.getInsets(WindowInsets.Type.displayCutout()).let {
+                // getInsets(displayCutout) 在不同 ROM 上语义不一：MIUI 上返回的是
+                // 全量 cutout inset（含已被 systemBar 覆盖的部分）。取 max 而不是相加，
+                // 避免竖屏时 top 被算成 104 + 104。
+                it
+            }
+            l = maxOf(l, safe.left)
+            r = maxOf(r, safe.right)
+            b = maxOf(b, safe.bottom)
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                l = ins.systemWindowInsetLeft
+                t = ins.systemWindowInsetTop
+                r = ins.systemWindowInsetRight
+                b = ins.systemWindowInsetBottom
+            }
+        }
+        return intArrayOf(l, t, r, b)
+    }
+
+    /**
+     * 把 [paddings] 直接贴到某个 View 上（通常传顶栏或整个内容容器）。
+     *
+     * 用 `setOnApplyWindowInsetsListener` 而不是「读一次就设死」：转屏、分屏、
+     * 手势条隐藏/出现都会重发 inset，读一次会留在旧值上。返回 `CONSUMED` 是
+     * 因为 padding 已经由我们自己处理，不再往子 View 传，不然子 View 会
+     * 再叠一层 padding，越套越深。
+     */
+    fun padBySystemBars(view: View) {
+        view.setOnApplyWindowInsetsListener { v, insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bar = insets.getInsets(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+                )
+                v.setPadding(bar.left, bar.top, bar.right, bar.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                v.setPadding(
+                    insets.systemWindowInsetLeft,
+                    insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight,
+                    insets.systemWindowInsetBottom
+                )
+            }
+            insets
+        }
+        // 已经分发过一次的 inset 不会因为新挂 listener 而重发，手动请求一次
+        view.requestApplyInsets()
     }
 
     /**

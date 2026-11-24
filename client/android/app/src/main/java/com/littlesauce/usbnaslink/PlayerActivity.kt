@@ -85,6 +85,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
 
         player = Player(this)
         player.listener = this
@@ -175,7 +177,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         }
 
         val hint = TextView(this).apply {
-            text = "拖动进度条可跳转（部分格式解不了就自动跳下一首）"
+            text = getString(R.string.play_seek_hint)
             setTextColor(Palette.FAINT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             gravity = Gravity.CENTER
@@ -190,9 +192,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             player.playlist.mode = player.playlist.mode.next()
             modeBtn.text = modeLabel()
         }
-        val prev = ctlButton("上一首") { goSwitch(true) }
-        playBtn = ctlButton("播放") { player.toggle() }
-        val next = ctlButton("下一首") { goSwitch(false) }
+        val prev = ctlButton(getString(R.string.play_prev)) { goSwitch(true) }
+        playBtn = ctlButton(getString(R.string.play_play)) { player.toggle() }
+        val next = ctlButton(getString(R.string.play_next)) { goSwitch(false) }
         for (b in listOf(modeBtn, prev, playBtn, next)) {
             ctl.addView(b, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
                 marginStart = dp(4); marginEnd = dp(4)
@@ -205,8 +207,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        scrapeBtn = ctlButton("刮削歌词") { askScrape() }
-        overlayBtn = ctlButton("桌面歌词") { toggleOverlay() }
+        scrapeBtn = ctlButton(getString(R.string.play_scrape)) { askScrape() }
+        overlayBtn = ctlButton(getString(R.string.play_overlay_on)) { toggleOverlay() }
         tools.addView(scrapeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
             marginStart = dp(4); marginEnd = dp(4); topMargin = dp(8)
         })
@@ -221,7 +223,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             gravity = Gravity.CENTER
             setPadding(0, dp(10), 0, 0)
-            text = "就绪"
+            text = getString(R.string.play_ready)
         }
 
         // ---- 竖屏：标题/副标题 + 唱片 + 歌词 + 进度 + 按钮，一路竖着排 ----
@@ -413,10 +415,10 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     }
 
     private fun modeLabel(): String = when (player.playlist.mode) {
-        Music.Mode.SEQUENTIAL -> "顺序"
-        Music.Mode.LOOP_ALL -> "列表循环"
-        Music.Mode.LOOP_ONE -> "单曲循环"
-        Music.Mode.SHUFFLE -> "随机"
+        Music.Mode.SEQUENTIAL -> getString(R.string.play_mode_seq)
+        Music.Mode.LOOP_ALL -> getString(R.string.play_mode_all)
+        Music.Mode.LOOP_ONE -> getString(R.string.play_mode_one)
+        Music.Mode.SHUFFLE -> getString(R.string.play_mode_shuffle)
     }
 
     private fun ctlButton(label: String, onClick: () -> Unit) = Button(this).apply {
@@ -450,7 +452,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private fun goSwitch(prev: Boolean) {
         val canGo = if (prev) player.playlist.hasPrev() else player.playlist.hasNext()
         if (!canGo) {
-            toast(if (prev) "已经是第一首" else "已经是最后一首")
+            toast(if (prev) getString(R.string.play_at_first) else getString(R.string.play_at_last))
             return
         }
         disc.spinSwitch(prev) {
@@ -472,13 +474,13 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 注意：这里不要 setSpinning(false)。切歌动画里唱针正抬着，落针由 DiscView 在
         // 新盘滑回来之后自己决定；手动置 false 会把「切歌」误当成「用户暂停」。
         loadCover(track)
-        lyricTag.text = "第 ${index + 1}/${player.playlist.items.size} 首 · ${track.lrcName ?: "无歌词"}"
+        lyricTag.text = getString(R.string.play_track_line, index + 1, player.playlist.items.size, track.lrcName ?: getString(R.string.play_no_lyrics))
         // 打一行日志：播放页刷新太密，uiautomator 抓不到 idle，出问题时只能靠日志定位
         android.util.Log.i("USBNASLink", "track ${index + 1}/${player.playlist.items.size} ${track.name} lrc=${track.lrcName ?: "-"}")
         // 换歌时上一首的候选列表必须关掉，否则点了会把 A 的歌词存给 B
         scrapeDialog?.dismiss()
         scrapeDialog = null
-        if (overlayOn) overlay?.setNotice("（正在加载歌词…）")
+        if (overlayOn) overlay?.setNotice(getString(R.string.play_lyrics_loading))
     }
 
     /**
@@ -548,14 +550,14 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         val o = overlay ?: return
         if (parsed.isEmpty()) {
             val t = player.current()
-            o.setNotice(if (t != null && !t.hasLyrics()) "（这首没歌词，点「刮削歌词」找一份）" else "（暂无歌词）")
+            o.setNotice(if (t != null && !t.hasLyrics()) getString(R.string.play_lyrics_none_scrape) else getString(R.string.play_lyrics_none))
         } else {
             o.setLrc(parsed)
         }
     }
 
     override fun onState(playing: Boolean) {
-        playBtn.text = if (playing) "暂停" else "播放"
+        playBtn.text = if (playing) getString(R.string.play_pause) else getString(R.string.play_play)
         disc.setSpinning(playing)
     }
 
@@ -573,7 +575,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     }
 
     override fun onEnded() {
-        playBtn.text = "播放"
+        playBtn.text = getString(R.string.play_play)
         disc.setSpinning(false)
     }
 
@@ -593,23 +595,23 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
      */
     private fun askScrape() {
         val t = player.current() ?: run {
-            toast("还没开始播放")
+            toast(getString(R.string.play_not_started))
             return
         }
         val st = ScrapeState()
         scrapeBtn.isEnabled = false
-        scrapeBtn.text = "搜索中…"
+        scrapeBtn.text = getString(R.string.play_searching)
         Thread {
             val r = Lyrics.search(baseUrl, sid, t.path, null, 20000)
             runOnUiThread {
                 scrapeBtn.isEnabled = true
-                scrapeBtn.text = "刮削歌词"
+                scrapeBtn.text = getString(R.string.play_scrape)
                 if (!r.ok) {
-                    toast("搜不到：" + (r.error ?: "未知原因"))
+                    toast(getString(R.string.play_search_fail, r.error ?: getString(R.string.common_unknown_error)))
                     return@runOnUiThread
                 }
                 if (r.items.isEmpty()) {
-                    toast("没有匹配「${r.query}」的歌词")
+                    toast(getString(R.string.play_search_empty, r.query))
                     return@runOnUiThread
                 }
                 showCandidates(t, r, st)
@@ -626,23 +628,23 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         val names = r.items.map { it.line() }.toTypedArray()
         val checked = booleanArrayOf(st.overwrite)
         scrapeDialog = androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("选一份歌词")
+            .setTitle(getString(R.string.play_pick_lyrics))
             .setSingleChoiceItems(names, -1) { d, which ->
                 val c = r.items[which]
                 d.dismiss()
                 scrapeDialog = null
                 doSave(t, c, st.overwrite)
             }
-            .setNegativeButton("取消") { d, _ ->
+            .setNegativeButton(getString(R.string.common_cancel)) { d, _ ->
                 d.dismiss()
                 scrapeDialog = null
             }
-            .setNeutralButton("覆盖同名") { _, _ ->
+            .setNeutralButton(getString(R.string.play_overwrite)) { _, _ ->
                 st.overwrite = !st.overwrite
                 checked[0] = st.overwrite
                 // 这个按钮只切状态，不关框 —— 关了就看不到候选了
             }
-            .setPositiveButton("搜索词…") { d, _ ->
+            .setPositiveButton(getString(R.string.play_search_word)) { d, _ ->
                 d.dismiss()
                 scrapeDialog = null
                 askKeyword(t)
@@ -655,32 +657,32 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private fun askKeyword(t: Track) {
         val box = android.widget.EditText(this).apply {
             setSingleLine()
-            hint = "歌手 歌名"
+            hint = getString(R.string.play_search_hint)
             setText(t.artist() + " " + t.displayTitle())
         }
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("用关键词搜")
+            .setTitle(getString(R.string.play_search_title))
             .setView(box)
-            .setPositiveButton("搜索") { d, _ ->
+            .setPositiveButton(getString(R.string.play_search)) { d, _ ->
                 d.dismiss()
                 val kw = box.text.toString().trim()
                 if (kw.isEmpty()) return@setPositiveButton
                 searchByKeyword(t, kw)
             }
-            .setNegativeButton("取消") { d, _ -> d.dismiss() }
+            .setNegativeButton(getString(R.string.common_cancel)) { d, _ -> d.dismiss() }
             .show()
     }
 
     private fun searchByKeyword(t: Track, kw: String) {
         scrapeBtn.isEnabled = false
-        scrapeBtn.text = "搜索中…"
+        scrapeBtn.text = getString(R.string.play_searching)
         Thread {
             val r = Lyrics.search(baseUrl, sid, t.path, kw, 20000)
             runOnUiThread {
                 scrapeBtn.isEnabled = true
-                scrapeBtn.text = "刮削歌词"
+                scrapeBtn.text = getString(R.string.play_scrape)
                 if (!r.ok || r.items.isEmpty()) {
-                    toast("没搜到「$kw」")
+                    toast(getString(R.string.play_search_none, kw))
                 } else {
                     showCandidates(t, r, ScrapeState())
                 }
@@ -701,7 +703,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private fun sessionReady(): Boolean {
         val s = sid
         if (s.isNullOrEmpty()) {
-            toast("先登录一次再刮削：写歌词要用有写权限的账号")
+            toast(getString(R.string.play_need_login_write))
             return false
         }
         val ok = try {
@@ -710,7 +712,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             null
         }
         if (ok == false) {
-            toast("登录已过期（服务端重启过），请回网页端重新登录后再刮削")
+            toast(getString(R.string.play_login_expired))
             return false
         }
         return true
@@ -719,7 +721,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private fun doSave(t: Track, c: Lyrics.Cand, overwrite: Boolean) {
         if (!sessionReady()) return
         scrapeBtn.isEnabled = false
-        scrapeBtn.text = "保存中…"
+        scrapeBtn.text = getString(R.string.play_saving)
         Thread {
             var res = Lyrics.save(baseUrl, sid, t.path, c.token, overwrite, 20000)
             // 同名文件已存在时，服务端拒绝得很干脆：直接覆盖一次，别让用户再点一遍
@@ -729,22 +731,25 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             val finalRes = res
             runOnUiThread {
                 scrapeBtn.isEnabled = true
-                scrapeBtn.text = "刮削歌词"
+                scrapeBtn.text = getString(R.string.play_scrape)
                 if (!finalRes.ok) {
-                    val e = finalRes.error ?: "未知原因"
-                    // 会话刚好在这几秒里过期时，仍然会走到这条分支
-                    if (e.contains("写权限") || e.contains("登录")) {
-                        toast("没存上：$e（多半是登录已过期，重新登录后再试）")
+                    val e = finalRes.error ?: getString(R.string.common_unknown_error)
+                    // 会话刚好在这几秒里过期时，仍然会走到这条分支。
+                    // 注意这里匹配的是「服务端返回的中文报错」，不是本机文案，
+                    // 所以翻译成英文界面也依然是这个中文子串 —— 正是要它。
+                    val looksAuth = e.contains("写权限") || e.contains("登录")
+                    if (looksAuth) {
+                        toast(getString(R.string.play_save_fail_login, e))
                     } else {
-                        toast("没存上：$e")
+                        toast(getString(R.string.play_save_fail, e))
                     }
                     return@runOnUiThread
                 }
                 // 存好了要让「当前这首」知道自己有歌词了，否则下一次 loadLyric 仍然早退
                 t.lrcName = finalRes.file
-                lyricTag.text = "已保存 ${finalRes.file}（${finalRes.bytes} 字节）"
+                lyricTag.text = getString(R.string.play_saved, finalRes.file, finalRes.bytes)
                 player.reloadLyricFor(t)
-                toast("歌词已保存：" + finalRes.file)
+                toast(getString(R.string.play_saved_toast, finalRes.file))
             }
         }.start()
     }
@@ -762,38 +767,38 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         if (overlayOn) {
             overlayOn = false
             overlay?.hide()
-            overlayBtn.text = "桌面歌词"
-            toast("桌面歌词已关")
+            overlayBtn.text = getString(R.string.play_overlay_on)
+            toast(getString(R.string.play_overlay_off_done))
             return
         }
         if (!LyricOverlay.canDraw(this)) {
-            toast("需要「显示在其他应用上层」权限")
+            toast(getString(R.string.play_need_overlay_perm))
             try {
                 startActivity(android.content.Intent(
                     android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     android.net.Uri.parse("package:$packageName")
                 ))
             } catch (ignored: Throwable) {
-                toast("请在系统设置 → 应用 → 特殊权限里打开悬浮窗")
+                toast(getString(R.string.play_overlay_perm_how))
             }
             return
         }
         val o = overlay ?: LyricOverlay(this).also { overlay = it }
         if (!o.show()) {
-            toast("浮窗打不开（权限被拒或系统限制）")
+            toast(getString(R.string.play_overlay_failed))
             return
         }
         overlayOn = true
-        overlayBtn.text = "关闭歌词"
+        overlayBtn.text = getString(R.string.play_overlay_off)
         val cur = player.current()
         val cached = player.currentLrc()
         if (cached.isNotEmpty()) {
             o.setLrc(cached)
             o.tick(player.position())
         } else {
-            o.setNotice(if (cur != null && !cur.hasLyrics()) "（这首没歌词，点「刮削歌词」找一份）" else "（暂无歌词）")
+            o.setNotice(if (cur != null && !cur.hasLyrics()) getString(R.string.play_lyrics_none_scrape) else getString(R.string.play_lyrics_none))
         }
-        toast("桌面歌词已开，可拖动上下移动")
+        toast(getString(R.string.play_overlay_on_done))
     }
 
     /**

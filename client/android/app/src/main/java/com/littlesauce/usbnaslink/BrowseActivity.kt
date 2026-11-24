@@ -54,6 +54,8 @@ class BrowseActivity : AppCompatActivity() {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         setContentView(R.layout.activity_browse)
         prefs = Prefs(this)
 
@@ -66,7 +68,7 @@ class BrowseActivity : AppCompatActivity() {
         err = findViewById(R.id.err)
 
         if (baseUrl.isEmpty()) {
-            fail("没有可用的 NAS 地址")
+            fail(getString(R.string.browse_no_url))
             return
         }
 
@@ -134,7 +136,7 @@ class BrowseActivity : AppCompatActivity() {
             ) {
                 // 只处理主文档的失败，子资源（图标之类）失败不打扰用户
                 if (request?.isForMainFrame == true) {
-                    fail("打不开 $baseUrl\n${error?.description ?: ""}")
+                    fail(getString(R.string.browse_open_fail, baseUrl, error?.description ?: ""))
                 }
             }
         }

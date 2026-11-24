@@ -99,6 +99,8 @@ class VideoPlayerActivity : Activity() {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         url = intent.getStringExtra(EXTRA_URL) ?: ""
         name = intent.getStringExtra(EXTRA_NAME) ?: ""
         sid = intent.getStringExtra(EXTRA_SID)
@@ -161,7 +163,7 @@ class VideoPlayerActivity : Activity() {
         }
 
         titleText = TextView(this).apply {
-            text = if (name.isEmpty()) "视频" else name
+            text = if (name.isEmpty()) getString(R.string.video_title) else name
             setTextColor(Color.parseColor("#E6E9EF"))
             textSize = 15f
             maxLines = 1
@@ -202,11 +204,11 @@ class VideoPlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val back = btn("后退 15s") { skip(-15000) }
-        val play = btn("暂停") { togglePlay(it as Button) }
+        val back = btn(getString(R.string.video_back15)) { skip(-15000) }
+        val play = btn(getString(R.string.play_pause)) { togglePlay(it as Button) }
         playBtn = play
-        val fwd = btn("前进 15s") { skip(15000) }
-        val other = btn("用其它播放器") { openExternal() }
+        val fwd = btn(getString(R.string.video_fwd15)) { skip(15000) }
+        val other = btn(getString(R.string.video_other_player)) { openExternal() }
         row.addView(back)
         row.addView(play)
         row.addView(fwd)
@@ -286,18 +288,18 @@ class VideoPlayerActivity : Activity() {
                 try {
                     it.start()
                 } catch (e: Throwable) {
-                    onPlayFailed("起播失败：$e")
+                    onPlayFailed(getString(R.string.video_start_fail, e))
                     return@setOnPreparedListener
                 }
-                subText.text = "${it.videoWidth}×${it.videoHeight}    ·    内嵌播放"
-                playBtn.text = "暂停"
+                subText.text = getString(R.string.video_embedded, it.videoWidth, it.videoHeight)
+                playBtn.text = getString(R.string.play_pause)
             }
             p.setOnErrorListener { _, what, extra ->
-                onPlayFailed("解码失败（what=$what extra=$extra）")
+                onPlayFailed(getString(R.string.video_decode_fail, what, extra))
                 true
             }
             p.setOnCompletionListener {
-                subText.text = "播放结束"
+                subText.text = getString(R.string.video_ended)
             }
             p.prepareAsync()
             mp = p
@@ -311,7 +313,7 @@ class VideoPlayerActivity : Activity() {
         subText.text = msg
         subText.setTextColor(Color.parseColor("#FF8A94"))
         // 手机自带的 MediaPlayer 对 rmvb / 部分 hevc 封装无能为力，必须给条路
-        Toast.makeText(this, "这个格式系统解码器放不了，试试「用其它播放器」", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, getString(R.string.video_no_decoder_hint), Toast.LENGTH_LONG).show()
     }
 
     private fun togglePlay(b: Button) {
@@ -319,10 +321,10 @@ class VideoPlayerActivity : Activity() {
         try {
             if (p.isPlaying) {
                 p.pause()
-                b.text = "播放"
+                b.text = getString(R.string.play_play)
             } else {
                 p.start()
-                b.text = "暂停"
+                b.text = getString(R.string.play_pause)
             }
         } catch (ignored: Throwable) {
         }
@@ -346,7 +348,7 @@ class VideoPlayerActivity : Activity() {
             it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(it)
         } catch (e: Throwable) {
-            Toast.makeText(this, "没有能播放这个格式的播放器", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.video_no_player), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -387,7 +389,7 @@ class VideoPlayerActivity : Activity() {
         try {
             if (mp?.isPlaying == true) {
                 mp?.pause()
-                playBtn.text = "播放"
+                playBtn.text = getString(R.string.play_play)
             }
         } catch (ignored: Throwable) {
         }

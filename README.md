@@ -1,5 +1,7 @@
 # USBNAS
 
+> [English version](README.en.md)
+
 把一台闲置的 Android 手机变成局域网里的 NAS。
 
 服务端跑在手机上（插着 U 盘 / SD 卡），把音乐、影视、图书共享到局域网；客户端有 Windows 桌面版和 Android 版，负责浏览、播放、阅读。全部流量走局域网，不经过任何服务器。

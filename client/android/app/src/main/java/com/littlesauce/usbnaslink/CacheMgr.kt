@@ -54,7 +54,8 @@ object CacheMgr {
             if (mb < 1024) return String.format("%.1f MB", mb)
             return String.format("%.2f GB", mb / 1024.0)
         }
-        fun text(): String = "PDF ${human(pdfBytes)}（$pdfFiles 个） · 安装包 ${human(updateBytes)}（$updateFiles 个）"
+        fun text(ctx: android.content.Context): String =
+        ctx.getString(R.string.upd_cache_text, human(pdfBytes), pdfFiles, human(updateBytes), updateFiles)
     }
 
     fun pdfDir(ctx: Context): File = File(ctx.cacheDir, "pdf")

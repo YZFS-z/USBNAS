@@ -73,6 +73,8 @@ class BookReaderActivity : Activity() {
         // 主题必须在建界面之前定下来：Palette 的取值是"当时"算的，
         // 界面建完再改模式，已画好的控件不会自己重算颜色。
         ThemeCtl.prime(this)
+        // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
+        L.prime(this)
         baseUrl = intent.getStringExtra(EXTRA_URL) ?: ""
         sid = intent.getStringExtra(EXTRA_SID)
         path = intent.getStringExtra(EXTRA_PATH) ?: ""
@@ -113,14 +115,14 @@ class BookReaderActivity : Activity() {
 
         val headText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         titleText = TextView(this).apply {
-            text = if (name.isEmpty()) "阅读" else name
+            text = if (name.isEmpty()) getString(R.string.book_title) else name
             setTextColor(Color.parseColor("#E6E9EF"))
             textSize = 15f
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
         metaText = TextView(this).apply {
-            text = "正在读取…"
+            text = getString(R.string.book_reading)
             setTextColor(Color.parseColor("#7D8590"))
             textSize = 10f
         }
@@ -129,7 +131,7 @@ class BookReaderActivity : Activity() {
         head.addView(headText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         val other = TextView(this).apply {
-            text = "网页"
+            text = getString(R.string.book_web)
             setTextColor(Color.parseColor("#5AA9FF"))
             textSize = 13f
             setPadding(dp(10), dp(6), dp(4), dp(6))
@@ -224,14 +226,14 @@ class BookReaderActivity : Activity() {
             if (bt.pdf) {
                 // PDF 不再给「去浏览器」两个按钮：PDFium 已经打进包里了，
                 // 直接开内嵌阅读页，翻页/缩放/跳页全在 App 里。
-                metaText.text = "PDF：正在打开内嵌阅读器"
+                metaText.text = getString(R.string.book_pdf_opening)
                 spinner.visibility = View.GONE
                 openPdf()
                 return
             } else {
-                metaText.text = "打不开"
+                metaText.text = getString(R.string.book_cannot_open)
                 body.setTextColor(Color.parseColor("#FF8A94"))
-                body.text = bt.error ?: "读取失败"
+                body.text = bt.error ?: getString(R.string.book_read_fail)
             }
             return
         }
@@ -255,7 +257,7 @@ class BookReaderActivity : Activity() {
             setPadding(dp(18), dp(10), dp(18), dp(10))
         }
         row.addView(Button(this).apply {
-            text = "在 App 里打开（PDFium）"
+            text = getString(R.string.book_open_in_app)
             isAllCaps = false
             setTextColor(Color.WHITE)
             // 主色实心：这是这一屏唯一推荐的主动作
@@ -267,7 +269,7 @@ class BookReaderActivity : Activity() {
             rightMargin = dp(8)
         })
         row.addView(Button(this).apply {
-            text = "用设备上的 PDF 阅读器打开"
+            text = getString(R.string.book_open_external_pdf)
             isAllCaps = false
             setTextColor(Palette.FG)
             backgroundTintList = null
@@ -314,7 +316,7 @@ class BookReaderActivity : Activity() {
                 setDataAndType(android.net.Uri.parse(fileUrl), mime)
             })
         } catch (e: Throwable) {
-            Toast.makeText(this, "设备上没有能打开这个格式的应用", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.book_no_app), Toast.LENGTH_LONG).show()
         }
     }
 

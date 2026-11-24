@@ -1,0 +1,352 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    English UI strings.
+
+    ## Why the wording is not literal
+
+    The Chinese original is written for a Chinese reader who already knows what
+    a NAS is. A word-for-word translation reads like a manual. So the English
+    side is written as if the app were originally English: same information,
+    same tone (direct, slightly informal), natural phrasing.
+
+    Examples of deliberate divergence:
+    - 「正在寻找 NAS」 -> "Looking for your NAS"  (not "Searching NAS")
+    - 「重新扫描」     -> "Scan again"           (not "Rescan" — keeps the verb)
+    - 「已切到日间（三端同步）」 -> "Switched to Day (synced to all devices)"
+    - 「不配就是空书库」 -> "leave it empty and the shelf stays empty"
+
+    ## Placeholders
+
+    Argument order is identical to the Chinese file. Never reuse a translated
+    string across two contexts that need different grammar — add a new key.
+-->
+<resources>
+    <string name="app_name">USBNAS Link</string>
+
+    <!-- ===== Common ===== -->
+    <string name="common_ok">OK</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_close">Close</string>
+    <string name="common_save">Save</string>
+    <string name="common_refresh">Refresh</string>
+    <string name="common_loading">Reading…</string>
+    <string name="common_retry">Try again</string>
+    <string name="common_unknown_error">Unknown error</string>
+    <string name="common_no_response">No response</string>
+    <string name="common_connection">Connect</string>
+    <string name="common_delete">Delete</string>
+    <string name="common_cancel_all">Deselect all</string>
+
+    <!-- ===== Scan screen ===== -->
+    <string name="scan_title">Looking for your NAS</string>
+    <string name="scan_hint">Scanning your local network…</string>
+    <string name="scan_rescan">Scan again</string>
+    <string name="scan_found_count">Found %1$d</string>
+    <string name="scan_empty">No NAS found.\nMake sure your phone and the NAS are on the same Wi-Fi.</string>
+    <string name="scan_manual">Enter address manually</string>
+    <string name="scan_manual_hint">192.168.1.10 or 192.168.1.10:8080</string>
+    <string name="scan_connect_failed">Can\'t reach %1$s</string>
+    <string name="scan_connect">Connect</string>
+    <string name="scan_update">Check for updates</string>
+
+    <!-- ===== Admin screen ===== -->
+    <string name="admin_title">Settings</string>
+    <string name="admin_no_server">Not connected to a server</string>
+    <string name="admin_load_failed">Couldn\'t load: %1$s</string>
+    <string name="admin_cannot_reach">Can\'t reach the server, or it doesn\'t support /_admin/api yet.</string>
+    <string name="admin_need_admin">Administrator required</string>
+    <string name="admin_need_admin_hint">Site name and media folders are global settings — only an administrator can change them. Sign in as an administrator on the web page, then come back here and you\'ll be signed in too.</string>
+    <string name="admin_not_admin_toast">You are not signed in as an administrator</string>
+    <string name="admin_current_user">Administrator: %1$s (%2$s)</string>
+    <string name="admin_current_user_not_admin">Signed in as “%1$s” (%2$s) — changing these needs an administrator</string>
+    <string name="admin_switch_user">Switch account</string>
+    <string name="admin_go_login">Sign in on the web page</string>
+    <string name="admin_saved">%1$s saved (%2$s)</string>
+    <string name="admin_saved_ok">applied</string>
+    <string name="admin_save_failed">%1$s not saved: %2$s</string>
+    <string name="admin_save_prefix">Save %1$s</string>
+    <string name="admin_picked_paths">Selected folders (exactly these lines get saved — you can also edit them by hand)</string>
+
+    <string name="admin_site_title">Site name</string>
+    <string name="admin_site_title_hint">Shown in the browser tab and response headers</string>
+    <string name="admin_site_title_note">Up to 24 characters. Leave it empty to use the default name.</string>
+    <string name="admin_music_dirs">Music folders</string>
+    <string name="admin_music_dirs_note">The app\'s player only looks for songs in these folders. Pick as many as you like (say half of drive 0\'s Music and half of drive 1\'s). Tap a box to tick it, tap the label to expand it.</string>
+    <string name="admin_video_dirs">Video folders</string>
+    <string name="admin_video_dirs_note">Movies and shows can live on different drives — the app groups them by folder. Posters and .nfo files are read from the same folder as the video.</string>
+    <string name="admin_book_dirs">Book folders</string>
+    <string name="admin_book_dirs_note">Only books in these folders show up on the Book tab. Recognises epub/pdf/mobi/azw3/fb2/djvu/cbz/cbr/txt/md — leave it empty and the shelf stays empty (the app will not crawl your whole drive hunting for books).</string>
+
+    <!-- ===== Library ===== -->
+    <string name="lib_library">Library</string>
+    <string name="lib_admin">Settings</string>
+    <string name="lib_tab_video">Video</string>
+    <string name="lib_tab_music">Music</string>
+    <string name="lib_tab_book">Books</string>
+    <string name="lib_tab_photo">Photos</string>
+    <string name="lib_tab_manage">Settings</string>
+    <string name="lib_tab_web">Web</string>
+    <string name="lib_theme_to_day">Day</string>
+    <string name="lib_theme_to_night">Night</string>
+    <string name="lib_theme_switched">Switched to %1$s (synced to all devices)</string>
+    <string name="lib_theme_local_only">Switched to %1$s — the server didn\'t save it: %2$s</string>
+    <string name="lib_theme_no_server">Not connected — changed on this phone only</string>
+    <string name="lib_select_all">Select all</string>
+    <string name="lib_photo_sel">%1$d selected</string>
+    <string name="lib_photo_sel_full">Deselect all</string>
+    <string name="lib_photo_loading">Loading photos…</string>
+    <string name="lib_hint_manage">Server: site name and library folders · This device: updates and cache</string>
+    <string name="lib_hint_photo">%1$d photos · %2$d albums</string>
+    <string name="lib_hint_video">%1$d videos · %2$d folders</string>
+    <string name="lib_hint_music">%1$d songs · %2$d folders</string>
+    <string name="lib_hint_music_artist">%1$s · by artist</string>
+    <string name="lib_hint_music_album">%1$s · by album</string>
+    <string name="lib_hint_book">%1$d books · %2$d shelves</string>
+
+    <!-- Empty states and group headers -->
+    <string name="lib_all_failed">Couldn\'t load any library: %1$s</string>
+    <string name="lib_empty_video">No videos yet. Point a folder at “Video folders” on the web page and they\'ll show up here.</string>
+    <string name="lib_group_videos">%1$d</string>
+    <string name="lib_group_other">Other</string>
+    <string name="lib_empty_music">No music yet. Point a folder at “Music folders” on the web page and they\'ll show up here.</string>
+    <string name="lib_no_match">No songs match “%1$s”.</string>
+    <string name="lib_group_songs">%1$d</string>
+    <string name="lib_buckets">%1$d %2$s — tap a name to expand</string>
+    <string name="lib_music_view_flat">Flat</string>
+    <string name="lib_music_view_artist">by artist</string>
+    <string name="lib_music_view_album">by album</string>
+    <string name="lib_search_hint">Search artist / album / title (%1$d songs)</string>
+    <string name="lib_has_lyrics">lyrics</string>
+    <string name="lib_books_failed">Couldn\'t load the shelf: %1$s</string>
+    <string name="lib_books_empty">No book folders yet. Point a folder at “Book folders” on the web page and they\'ll show up here.</string>
+    <string name="lib_shelf_empty">This shelf is empty.</string>
+    <string name="lib_group_books">%1$d</string>
+    <string name="lib_photos_failed">Couldn\'t load photos: %1$s</string>
+    <string name="lib_photos_empty">No photo folders yet. Set one under Settings → Photo folders and they\'ll show up here.</string>
+    <string name="lib_photos_dir_empty">No images in that folder yet.</string>
+    <string name="lib_group_photos">%1$d</string>
+    <string name="lib_photos_summary">%1$d photos · %2$d albums</string>
+    <string name="lib_del_confirm_title">Delete %1$d photos?</string>
+    <string name="lib_del_confirm_msg">They will be erased from the NAS disk for real — no recycle bin, no undo.</string>
+    <string name="lib_del_need_admin">Deleting needs an administrator — sign in under “Server” above first</string>
+    <string name="lib_del_running">Deleting %1$d…</string>
+    <string name="lib_del_done">Deleted %1$d</string>
+    <string name="lib_del_partial">Deleted %1$d, failed %2$d: %3$s</string>
+    <string name="lib_photo_open_failed">Couldn\'t open this image: %1$s</string>
+
+    <!-- ===== Settings cards ===== -->
+    <string name="set_server_section">1 · Server</string>
+    <string name="set_server_section_note">Site name, the four library folders and user accounts all live on the server and are shared by every client. Changing them needs an administrator.</string>
+    <string name="set_client_section">2 · This device</string>
+    <string name="set_client_section_note">The rest only affects the app on this phone — nothing is uploaded or synced, and changes apply at once.</string>
+    <string name="set_language">Language / 语言</string>
+    <string name="set_language_note">Redraws immediately — no restart needed.</string>
+    <string name="set_storage">Storage</string>
+    <string name="set_checking_login">Checking sign-in status…</string>
+    <string name="set_accounts">Accounts</string>
+    <string name="set_accounts_note">An administrator can change folders for anyone; read-write can browse and upload; read-only can watch and download. Changing someone\'s password signs them out everywhere.</string>
+    <string name="set_accounts_need_admin">Only an administrator can manage accounts.</string>
+    <string name="set_accounts_old_server">The server didn\'t return an account list (probably an older version). You can still manage accounts at the bottom of /_admin in a browser.</string>
+    <string name="set_new_account">New account</string>
+    <string name="set_account_name">Name (letters and digits)</string>
+    <string name="set_password">Password</string>
+    <string name="set_create_account">Create account</string>
+    <string name="set_need_name_pw">Fill in both name and password</string>
+    <string name="set_you_badge">you</string>
+    <string name="set_level_unknown">unknown level</string>
+    <string name="set_scoped"> · folder-limited</string>
+    <string name="set_online"> · %1$d online</string>
+    <string name="set_offline"> · offline</string>
+    <string name="set_that_is_you"> · that\'s you</string>
+    <string name="set_change_level">Change level</string>
+    <string name="set_change_pw">Change password</string>
+    <string name="set_kick">Sign out</string>
+    <string name="set_level_title">Level for “%1$s”</string>
+    <string name="set_new_pw">New password</string>
+    <string name="set_pw_title">Change password for “%1$s”</string>
+    <string name="set_pw_msg">Everywhere this account is signed in will be signed out and will need the new password.</string>
+    <string name="set_pw_do">Change</string>
+    <string name="set_pw_empty">Password can\'t be empty</string>
+    <string name="set_kick_title">Sign “%1$s” out?</string>
+    <string name="set_kick_msg">The account stays, but its %1$d active session(s) stop working right away and will have to sign in again.</string>
+    <string name="set_del_title">Delete account “%1$s”?</string>
+    <string name="set_del_msg">This can\'t be undone. Files they uploaded are not deleted.</string>
+    <string name="set_op_add">Create account</string>
+    <string name="set_op_pw">Change password</string>
+    <string name="set_op_level">Change level</string>
+    <string name="set_op_kick">Sign out</string>
+    <string name="set_op_del">Delete</string>
+    <string name="set_op_ok">%1$s: done</string>
+    <string name="set_op_fail">%1$s failed: %2$s</string>
+    <string name="set_level_read">Read-only · browse and download</string>
+    <string name="set_level_write">Read-write · browse, play, upload</string>
+    <string name="set_level_admin">Administrator · everything</string>
+    <string name="set_refreshing">Refreshing…</string>
+    <string name="set_refresh_failed">Refresh failed: %1$s</string>
+    <string name="set_refreshed_admin">Refreshed — signed in as administrator “%1$s”</string>
+    <string name="set_refreshed_user">Refreshed — signed in as “%1$s” (%2$s), not an administrator</string>
+    <string name="set_refreshed_anon">Refreshed — the server sees no session, please sign in again</string>
+    <string name="set_cannot_reach">Can\'t reach the server: %1$s</string>
+    <string name="set_logged_admin">Signed in as administrator %1$s (%2$s)</string>
+    <string name="set_logged_user">Signed in as %1$s (%2$s) — changing settings needs an administrator</string>
+    <string name="set_logged_out">Not signed in (session expired or never started)</string>
+    <string name="set_config_failed">Couldn\'t read the server settings: %1$s (it probably doesn\'t support /_admin/api yet)</string>
+    <string name="set_need_admin_user">Signed in as “%1$s” (%2$s) — changing settings needs an administrator.</string>
+    <string name="set_need_admin_login">Not signed in, or the session expired — changing settings needs an administrator.</string>
+    <string name="admin_book_dirs_note_short">Only books in these folders show up on the Book tab. Leave it empty and the shelf stays empty (no whole-drive hunting for txt files).</string>
+    <string name="admin_photo_dirs">Photo folders</string>
+    <string name="admin_photo_dirs_note">Only images in these folders show up on the Photos tab. Recognises jpg/jpeg/png/webp/bmp/gif/heic — no folders, no photos.</string>
+
+    <!-- ===== Player ===== -->
+    <string name="play_seek_hint">Drag the bar to jump (formats the decoder can\'t parse skip to the next track)</string>
+    <string name="play_prev">Previous</string>
+    <string name="play_next">Next</string>
+    <string name="play_play">Play</string>
+    <string name="play_pause">Pause</string>
+    <string name="play_ready">Ready</string>
+    <string name="play_mode_seq">In order</string>
+    <string name="play_mode_all">Repeat all</string>
+    <string name="play_mode_one">Repeat one</string>
+    <string name="play_mode_shuffle">Shuffle</string>
+    <string name="play_at_first">Already at the first track</string>
+    <string name="play_at_last">Already at the last track</string>
+    <string name="play_track_line">Track %1$d/%2$d · %3$s</string>
+    <string name="play_no_lyrics">no lyrics</string>
+    <string name="play_lyrics_loading">(loading lyrics…)</string>
+    <string name="play_lyrics_none">(no lyrics)</string>
+    <string name="play_lyrics_none_scrape">(no lyrics for this one — tap “Fetch lyrics” to look for some)</string>
+    <string name="play_not_started">Nothing is playing yet</string>
+    <string name="play_scrape">Fetch lyrics</string>
+    <string name="play_searching">Searching…</string>
+    <string name="play_saving">Saving…</string>
+    <string name="play_search_fail">Search failed: %1$s</string>
+    <string name="play_search_empty">Nothing matched “%1$s”</string>
+    <string name="play_search_none">No results for “%1$s”</string>
+    <string name="play_pick_lyrics">Pick a lyric file</string>
+    <string name="play_overwrite">Overwrite existing</string>
+    <string name="play_search_word">Search terms…</string>
+    <string name="play_search_hint">artist and title</string>
+    <string name="play_search_title">Search by keyword</string>
+    <string name="play_search">Search</string>
+    <string name="play_need_login_write">Sign in first — saving lyrics needs an account with write access</string>
+    <string name="play_login_expired">Your session expired (the server restarted). Sign in again on the web page, then retry.</string>
+    <string name="play_save_fail_login">Not saved: %1$s (most likely an expired session — sign in and try again)</string>
+    <string name="play_save_fail">Not saved: %1$s</string>
+    <string name="play_saved">Saved %1$s (%2$d bytes)</string>
+    <string name="play_saved_toast">Lyrics saved: %1$s</string>
+    <string name="play_overlay_on">On-screen lyrics</string>
+    <string name="play_overlay_off">Turn lyrics off</string>
+    <string name="play_overlay_on_done">On-screen lyrics on — drag to move them up or down</string>
+    <string name="play_overlay_off_done">On-screen lyrics off</string>
+    <string name="play_need_overlay_perm">Needs the “display over other apps” permission</string>
+    <string name="play_overlay_perm_how">Turn on the overlay permission in Settings → Apps → Special access</string>
+    <string name="play_overlay_failed">Couldn\'t show the overlay (permission denied or blocked by the system)</string>
+
+    <!-- ===== Theme button ===== -->
+    <string name="theme_switched">Switched to %1$s (synced to all devices)</string>
+    <string name="theme_switched_fail">Switched to %1$s · the server didn\'t save it: %2$s</string>
+    <string name="theme_local_only">Switched to %1$s · no server connected, this phone only</string>
+
+    <!-- ===== Video ===== -->
+    <string name="video_title">Video</string>
+    <string name="video_back15">Back 15s</string>
+    <string name="video_fwd15">Forward 15s</string>
+    <string name="video_other_player">Open in another player</string>
+    <string name="video_start_fail">Couldn\'t start playback: %1$s</string>
+    <string name="video_embedded">%1$d×%2$d    ·    playing inline</string>
+    <string name="video_decode_fail">Decoding failed (what=%1$d extra=%2$d)</string>
+    <string name="video_ended">Playback finished</string>
+    <string name="video_no_decoder_hint">The system decoder can\'t play this format — try “Open in another player”</string>
+    <string name="video_no_player">No installed player handles this format</string>
+
+    <!-- ===== Reader ===== -->
+    <string name="book_title">Read</string>
+    <string name="book_reading">Loading…</string>
+    <string name="book_read_fail">Couldn\'t read it</string>
+    <string name="book_web">Web page</string>
+    <string name="book_pdf_opening">PDF: opening the built-in reader</string>
+    <string name="book_cannot_open">Can\'t open</string>
+    <string name="book_open_in_app">Open in the app (PDFium)</string>
+    <string name="book_open_external_pdf">Open in the device\'s PDF reader</string>
+    <string name="book_no_app">No installed app can open this format</string>
+
+    <!-- ===== PDF ===== -->
+    <string name="pdf_opening">Opening…</string>
+    <string name="pdf_last_page">Last page</string>
+    <string name="pdf_empty_url">The address is empty</string>
+    <string name="pdf_fetching">Fetching the file…</string>
+    <string name="pdf_fetching_pct">Fetching the file… %1$d%%</string>
+    <string name="pdf_fetch_fail">Couldn\'t fetch the file: %1$s</string>
+    <string name="pdf_no_cache_dir">Couldn\'t create the cache folder</string>
+    <string name="pdf_too_small">The file is too small to be a PDF</string>
+    <string name="pdf_cache_write_fail">Couldn\'t write the cache file</string>
+    <string name="pdf_parsing">Parsing…</string>
+    <string name="pdf_pages">%1$d pages · rendered inline (PDFium)</string>
+    <string name="pdf_open_fail">Couldn\'t open this PDF: %1$s</string>
+    <string name="pdf_open_other_app">Open in another app on this device</string>
+    <string name="pdf_no_app">No installed app can open PDFs</string>
+
+    <!-- ===== Embedded browser ===== -->
+    <string name="browse_no_url">No NAS address available</string>
+    <string name="browse_open_fail">Couldn\'t open %1$s\n%2$s</string>
+
+    <!-- ===== Folder tree ===== -->
+    <string name="dirtree_hint">One folder per line, e.g.\n/storage/emulated/0/Music\n/mnt/media_rw/XXXX/Movies</string>
+    <string name="dirtree_candidates">Suggested folders</string>
+    <string name="dirtree_no_candidates">The server didn\'t suggest any folders — typing paths in the box below works just as well.</string>
+    <string name="dirtree_nothing_picked">Nothing picked yet. Tap “Show all folders” at the top right to choose one, or just type a path below.</string>
+    <string name="dirtree_count">Folder tree · %1$d picked</string>
+    <string name="dirtree_showing_all"> (showing all)</string>
+    <string name="dirtree_showing_picked"> (picked only)</string>
+    <string name="dirtree_show_picked">Picked only</string>
+    <string name="dirtree_show_all">Show all folders</string>
+    <string name="dirtree_configured_missing">  · configured (not in the list)</string>
+    <string name="dirtree_internal">Internal storage</string>
+    <string name="dirtree_external">External drive %1$s</string>
+    <string name="dirtree_storage_n">Storage %1$d</string>
+
+    <!-- ===== App updates ===== -->
+    <string name="upd_check_fail">Check failed: %1$s</string>
+    <string name="upd_latest">Already up to date (%1$s)</string>
+    <string name="upd_skipped_ver">You skipped this version (%1$s)</string>
+    <string name="upd_found">New version %1$s</string>
+    <string name="upd_current">You have %1$s → %2$s%3$s</string>
+    <string name="upd_install_note">The system installer opens when the download finishes. Installing over the top keeps your server list and settings.</string>
+    <string name="upd_later">Later</string>
+    <string name="upd_skip">Skip this version</string>
+    <string name="upd_no_more">You won\'t be reminded about %1$s</string>
+    <string name="upd_go">Download and install</string>
+    <string name="upd_connecting">Connecting…</string>
+    <string name="upd_downloading">Downloading %1$s</string>
+    <string name="upd_incomplete">The download is incomplete</string>
+    <string name="upd_download_fail">Download failed: %1$s</string>
+    <string name="upd_no_installer">Couldn\'t open the installer: %1$s — the package is at %2$s</string>
+    <string name="upd_title">Automatic updates</string>
+    <string name="upd_check_online">Check for new versions online</string>
+    <string name="upd_check_note">You have %1$s. When on, the app checks GitHub Releases at most once per launch and no more than every 6 hours. When off, it sends no requests at all.</string>
+    <string name="upd_check_now">Check now</string>
+    <string name="upd_unskip">Stop skipping %1$s</string>
+    <string name="upd_skip_cleared">Skip mark cleared</string>
+    <string name="upd_about">About</string>
+    <string name="upd_k_version">Version</string>
+    <string name="upd_k_last_check">Last check</string>
+    <string name="upd_never_checked">never</string>
+    <string name="upd_k_releases">Releases</string>
+    <string name="upd_open_releases">Open the releases page</string>
+    <string name="upd_open_link_fail">Couldn\'t open the link: %1$s</string>
+    <string name="upd_counting">Counting…</string>
+    <string name="upd_storage_note">Only the most recent PDFs are kept and update packages go away once installed. The web cache is left alone — clearing it loses scroll position and the sign-in state.</string>
+    <string name="upd_clean_now">Clean now</string>
+    <string name="upd_cleaning">Cleaning…</string>
+    <string name="upd_nothing_to_clean">Nothing to clean up</string>
+    <string name="upd_already_clean">Already clean</string>
+    <string name="upd_freed">Freed %1$s</string>
+    <string name="upd_usage_total">%1$s · %2$s total</string>
+    <string name="upd_cache_text">PDF %1$s (%2$d files) · installers %3$s (%4$d files)</string>
+
+    <!-- ===== Launcher entries ===== -->
+    <string name="launch_library">Library</string>
+    <string name="launch_admin">Settings</string>
+    <string name="pdf_activity_label">PDF reader</string>
+    <string name="launch_pdf">PDF Reader</string>
+</resources>

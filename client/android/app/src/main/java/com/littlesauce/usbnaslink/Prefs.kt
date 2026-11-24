@@ -90,6 +90,19 @@ class Prefs(ctx: Context) {
             sp.edit().putString(KEY_THEME, v).apply()
         }
 
+    /**
+     * 界面语言（`zh` / `en`）。默认中文 —— 这个 App 的中文用户在绝大多数场景下
+     * 用得最多，而且首启动不该出现「界面变成英文但看不懂怎么改回来」。
+     *
+     * 存放位置和主题一样放这里：都是「这台设备自己的显示偏好」，
+     * 和服务端的全局配置无关，换台手机应该各记各的。
+     */
+    var lang: String
+        get() = sp.getString(KEY_LANG, "zh") ?: "zh"
+        set(v) {
+            sp.edit().putString(KEY_LANG, v).apply()
+        }
+
     private companion object {
         const val KEY_URL = "last_url"
         const val KEY_NAME = "last_name"
@@ -100,5 +113,6 @@ class Prefs(ctx: Context) {
         const val KEY_LAST_UPDATE_CHECK = "last_update_check"
         const val KEY_REMEMBER = "remember_device"
         const val KEY_THEME = "theme"
+        const val KEY_LANG = "lang"
     }
 }
