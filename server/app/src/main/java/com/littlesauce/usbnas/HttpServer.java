@@ -850,7 +850,7 @@ public class HttpServer {
                 || p.equals("/_rename") || p.equals("/_move")
                 || p.equals("/_dirlist")
                 || p.equals("/_share/new") || p.equals("/_share/drop")
-                || p.equals("/_share/list"))) {
+                || p.equals("/_share/list") || p.equals("/_share/tree"))) {
             return true;
         }
         // 曲库清单与 /_dirlist 同性质：只吐文件路径，不吐内容。
@@ -1441,6 +1441,14 @@ public class HttpServer {
         }
         if (path.equals("/_share/list")) {
             handleShareList(req, out);
+            return;
+        }
+        if (path.equals("/_share/tree")) {
+            handleShareTree(req, out);
+            return;
+        }
+        if (path.equals("/_share")) {
+            handleSharePage(req, in, out);
             return;
         }
 
@@ -6383,6 +6391,124 @@ public class HttpServer {
     }
 
     /**
+     * 懒加载的「可分享树」端点：给一个目录路径，返回它下面的一层（子目录 + 文件）。
+     *
+     * <p>为什么不做成一次性吐整棵树：一个盘随手就是几万个文件，服务端一次列完
+     * 会卡好几秒、浏览器也渲染不动。改成点一层拉一层，跟文件管理器一样。
+     * 不传 p 时返回各个存储根（liveRoots）。
+     *
+     * <p>权限：沿用「能不能写」判定（生成分享要 canWrite），并且只列 inScope 的
+     * 路径。每个节点带 dir/p/n/s 四个字段，前端据此画 ▸ 和分享按钮。
+     */
+    private void handleShareTree(Request req, OutputStream out) throws IOException {
+        if (req.user == null) {
+            sendJson(out, "{\"ok\":false,\"error\":\"先登录\"}");
+            return;
+        }
+        String p = req.param("p");
+        List<File> list = new ArrayList<>();
+        if (p == null || p.isEmpty() || "/".equals(p)) {
+            for (File r : liveRoots()) {
+                if (Users.inScope(req.user, r)) list.add(r);
+            }
+        } else {
+            File d = resolve(p);
+            if (d == null || !d.isDirectory() || !Users.inScope(req.user, d)
+                    || !canWrite(req, d)) {
+                sendJson(out, "{\"ok\":false,\"error\":\"打不开这个目录\"}");
+                return;
+            }
+            File[] kids = d.listFiles();
+            if (kids != null) {
+                for (File f : kids) {
+                    // 隐藏文件和「分享会踩到服务端自己」的目录都不列
+                    if (f.isHidden() || f.getName().startsWith(".")) continue;
+                    if (!Users.inScope(req.user, f)) continue;
+                    list.add(f);
+                }
+            }
+        }
+        java.util.Collections.sort(list, new java.util.Comparator<File>() {
+            public int compare(File a, File b) {
+                if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
+                return a.getName().compareToIgnoreCase(b.getName());
+            }
+        });
+        // 目录在前、文件在后，各设上限避免一次拉爆
+        StringBuilder sb = new StringBuilder("{\"ok\":true,\"items\":[");
+        boolean first = true;
+        int dirs = 0, files = 0;
+        for (File f : list) {
+            boolean isDir = f.isDirectory();
+            if (isDir ? dirs >= 500 : files >= 2000) continue;
+            if (isDir) dirs++; else files++;
+            if (!first) sb.append(',');
+            first = false;
+            sb.append("{\"p\":\"").append(jsonEsc(f.getAbsolutePath())).append('"')
+              .append(",\"n\":\"").append(jsonEsc(f.getName())).append('"')
+              .append(",\"d\":").append(isDir)
+              .append(",\"s\":").append(isDir ? 0L : f.length()).append('}');
+        }
+        sb.append("]}");
+        sendJson(out, sb.toString());
+    }
+
+    /**
+     * 独立的「链接分享」页面：一棵可展开的树，点文件/文件夹右边的「分享」按钮
+     * 就生成免登录短链。做成独立页而不是塞进管理页，是因为它要一屏放下一整棵树，
+     * 管理页那些配置项会把树挤到很下面。
+     *
+     * <p>树走 /_share/tree 懒加载：进入时拉存储根，点开目录再拉下一层，和文件
+     * 管理器一样，不会一次列出几万个文件把浏览器卡死。
+     */
+    private void handleSharePage(Request req, InputStream in, OutputStream out) throws IOException {
+        boolean logged = req.user != null;
+        boolean canShare = logged && canWrite(req, null);
+        StringBuilder sb = new StringBuilder();
+        htmlHead(sb, "链接分享", prefTheme);
+        sb.append("<div class='wrap'>\n");
+        sb.append("<header><a class='brand' href='/'><span class='dot'></span>")
+          .append(esc(cfg.title)).append("</a><div class='hact'>")
+          .append(themeButton("")).append(inkButton(""))
+          .append("</div></header>\n");
+        sb.append("<div class='adm-top'><h2>链接分享</h2>")
+          .append("<a class='adm-back' href='/_admin'>返回管理</a>")
+          .append("<a class='adm-back' href='/'>返回文件列表</a></div>\n");
+
+        if (!canShare) {
+            sb.append("<div class='login' style='max-width:520px'>")
+              .append("<div class='sub'>").append(logged
+                    ? "当前账号没有写权限，生成分享需要写权限。"
+                    : "生成分享要先登录。").append("</div>")
+              .append("<a href='/_login?back=/_share' style='color:#5aa9ff'>去登录</a>")
+              .append("</div>\n");
+            sb.append("</div>\n");
+            htmlFoot(sb);
+            sendHtml(out, 200, sb.toString());
+            return;
+        }
+
+        sb.append("<div class='adm-sect'>\n")
+          .append("<div class='adm-h'>选择要分享的文件或文件夹</div>\n")
+          .append("<div class='adm-hint'>点目录左边的 ▸ 展开，点条目右边的「分享」生成免登录短链。"
+                + " 任何拿到链接的人在同一局域网都能直接打开，不用登录；服务重启后失效。</div>\n");
+        sb.append("<div id='shareTree' class='adm-tree sh-tree'></div>\n");
+        sb.append("</div>\n");
+        sb.append("<div class='adm-sect'>\n")
+          .append("<div class='adm-h'>当前分享</div>\n")
+          .append("<div id='shareList' class='sh-list'>正在读取…</div>\n")
+          .append("</div>\n");
+
+        // 主题与面板样式（三套主题靠 body.light / body.ink 覆盖，见 SHARE_PAGE_CSS）
+        sb.append("<script>window.USBNAS_BASE=")
+          .append(jsStr(baseUrlFor(req))).append(";</script>\n");
+        sb.append(SHARE_PAGE_CSS).append(SHARE_PAGE_JS);
+        sb.append("</div>\n");
+        htmlFoot(sb);
+        sendHtml(out, 200, sb.toString());
+    }
+
+    /**
      * 请求方看到的本站根地址（形如 http://192.168.1.5:8080）。
      * 分享链接要能被别人直接粘到浏览器里，所以必须带主机和端口。
      */
@@ -7058,6 +7184,125 @@ public class HttpServer {
      * 面板里带「撤销这条」，POST /_share/drop。撤销只影响这一条链接，
      * 别人的分享和登录态都不动。服务端重启也会让全部链接失效（内存表）。
      */
+    /** 分享管理页专用样式：树行 + 分享按钮 + 列表项。面板样式复用 shpanel 那套。 */
+    private static final String SHARE_PAGE_CSS =
+            "<style>\n"
+            + ".sh-tree{max-height:none;min-height:120px}\n"
+            + ".sh-node{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid rgba(127,127,127,.10)}\n"
+            + ".sh-tw{display:inline-block;width:16px;text-align:center;cursor:pointer;color:#2f80ed;user-select:none}\n"
+            + ".sh-tw.leaf{color:transparent;cursor:default}\n"
+            + ".sh-ic{font-size:14px;width:16px;text-align:center}\n"
+            + ".sh-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}\n"
+            + ".sh-name.dir{font-weight:600}\n"
+            + ".sh-share{border:0;border-radius:7px;padding:3px 10px;font-size:12px;cursor:pointer;"
+            + "background:#1d2c3d;color:#8ec5ff}\n"
+            + ".sh-share:hover{background:#2a3d54}\n"
+            + ".sh-kids{padding-left:22px}\n"
+            + ".sh-kids.hide{display:none}\n"
+            + ".sh-list{display:flex;flex-direction:column;gap:6px}\n"
+            + ".sh-li{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:9px;"
+            + "background:rgba(127,127,127,.08);font-size:12px}\n"
+            + ".sh-li .sh-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n"
+            + ".sh-li a{color:#2f80ed;text-decoration:none;word-break:break-all}\n"
+            + ".sh-empty{color:#7d8590;font-size:12px;padding:8px 0}\n"
+            + "</style>\n";
+
+    /** 分享管理页脚本：懒加载树 + 生成/复制/撤销面板，全部复用现有 /_share/* 端点。 */
+    private static final String SHARE_PAGE_JS =
+            "<script>\n"
+            + "(function(){\n"
+            + "  var BASE=window.USBNAS_BASE||location.origin;\n"
+            + "  function el(tag,cls,txt){var e=document.createElement(tag);"
+            + "if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e;}\n"
+            + "  function get(path,cb){var x=new XMLHttpRequest();x.open('GET',path,true);"
+            + "x.onreadystatechange=function(){if(x.readyState!==4)return;"
+            + "var r=null;try{r=JSON.parse(x.responseText);}catch(e){}cb(r||{ok:false,error:'服务端没回话'});};"
+            + "x.send();}\n"
+            + "  function post(path,pairs,cb){var x=new XMLHttpRequest();x.open('POST',path,true);"
+            + "x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
+            + "x.onreadystatechange=function(){if(x.readyState!==4)return;"
+            + "var r=null;try{r=JSON.parse(x.responseText);}catch(e){}cb(r||{ok:false,error:'服务端没回话'});};"
+            + "var b=[];for(var i=0;i<pairs.length;i++)b.push(encodeURIComponent(pairs[i][0])+'='+encodeURIComponent(pairs[i][1]));"
+            + "x.send(b.join('&'));}\n"
+            + "  function copy(text){var ok=false;try{var ta=document.createElement('textarea');"
+            + "ta.value=text;ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);"
+            + "ta.select();ok=document.execCommand('copy');document.body.removeChild(ta);}catch(e){}\n"
+            + "    if(!ok&&navigator.clipboard){try{navigator.clipboard.writeText(text);ok=true;}catch(e){}}return ok;}\n"
+            + "  function panel(url,code,name){\n"
+            + "    var old=document.getElementById('shpanel');if(old)old.parentNode.removeChild(old);\n"
+            + "    var w=el('div','shpanel');w.id='shpanel';\n"
+            + "    w.appendChild(el('div','shtitle','免登录链接'));\n"
+            + "    w.appendChild(el('div','shnote',name+' — 任何人在同一局域网打开都能直接看，不用登录；服务重启后失效。'));\n"
+            + "    var inp=el('input','shurl');inp.type='text';inp.readOnly=true;inp.value=url;"
+            + "inp.onfocus=function(){inp.select();};w.appendChild(inp);\n"
+            + "    var row=el('div','shrow');\n"
+            + "    var bc=el('button','primary','复制链接');bc.type='button';"
+            + "bc.onclick=function(){if(copy(url))bc.textContent='已复制';else{inp.focus();inp.select();bc.textContent='请手动复制';}"
+            + "setTimeout(function(){bc.textContent='复制链接';},1600);};row.appendChild(bc);\n"
+            + "    var bo=el('a','ghost','打开看看');bo.href=url;bo.target='_blank';bo.rel='noopener';row.appendChild(bo);\n"
+            + "    var bd=el('button','danger','撤销这条');bd.type='button';"
+            + "bd.onclick=function(){post('/_share/drop',[['code',code]],function(r){"
+            + "if(w.parentNode)w.parentNode.removeChild(w);loadList();});};row.appendChild(bd);\n"
+            + "    w.appendChild(row);\n"
+            + "    var bx=el('button','ghost','关闭');bx.type='button';"
+            + "bx.onclick=function(){if(w.parentNode)w.parentNode.removeChild(w);};w.appendChild(bx);\n"
+            + "    document.body.appendChild(w);inp.focus();inp.select();\n"
+            + "  }\n"
+            + "  function share(path,name){\n"
+            + "    post('/_share/new',[['p',path]],function(r){\n"
+            + "      if(r&&r.ok&&r.url){panel(r.url,r.code,name||path);loadList();}\n"
+            + "      else{alert((r&&r.error)||'分享失败');}\n"
+            + "    });\n"
+            + "  }\n"
+            + "  function node(it){\n"
+            + "    var row=el('div','sh-node');\n"
+            + "    var tw=el('span','sh-tw'+(it.d?'':' leaf'),it.d?'▸':' ');\n"
+            + "    var ic=el('span','sh-ic',it.d?'📁':'🎞');\n"
+            + "    var nm=el('span','sh-name'+(it.d?' dir':''),it.n);\n"
+            + "    var sb=el('button','sh-share','分享');sb.type='button';"
+            + "sb.onclick=function(ev){ev.stopPropagation();share(it.p,it.n);};\n"
+            + "    row.appendChild(tw);row.appendChild(ic);row.appendChild(nm);row.appendChild(sb);\n"
+            + "    var kids=el('div','sh-kids hide');\n"
+            + "    tw.onclick=function(){\n"
+            + "      if(!it.d)return;\n"
+            + "      if(kids.classList.contains('hide')){kids.classList.remove('hide');tw.textContent='▾';"
+            + "if(!kids.getAttribute('data-loaded')){loadKids(it.p,kids);kids.setAttribute('data-loaded','1');}}\n"
+            + "      else{kids.classList.add('hide');tw.textContent='▸';}\n"
+            + "    };\n"
+            + "    var wrap=el('div');wrap.appendChild(row);wrap.appendChild(kids);\n"
+            + "    return wrap;\n"
+            + "  }\n"
+            + "  function loadKids(path,box){get('/_share/tree?p='+encodeURIComponent(path),function(r){\n"
+            + "    box.textContent='';\n"
+            + "    if(!r||!r.ok){box.appendChild(el('div','sh-empty',(r&&r.error)||'读取失败'));return;}\n"
+            + "    if(!r.items.length){box.appendChild(el('div','sh-empty','（空目录）'));return;}\n"
+            + "    for(var i=0;i<r.items.length;i++)box.appendChild(node(r.items[i]));\n"
+            + "  });}\n"
+            + "  function loadTree(){var root=document.getElementById('shareTree');root.textContent='读取中…';"
+            + "get('/_share/tree',function(r){\n"
+            + "    root.textContent='';\n"
+            + "    if(!r||!r.ok){root.appendChild(el('div','sh-empty',(r&&r.error)||'读取失败'));return;}\n"
+            + "    if(!r.items.length){root.appendChild(el('div','sh-empty','没有可分享的目录'));return;}\n"
+            + "    for(var i=0;i<r.items.length;i++)root.appendChild(node(r.items[i]));\n"
+            + "  });}\n"
+            + "  function loadList(){var box=document.getElementById('shareList');"
+            + "get('/_share/list',function(r){\n"
+            + "    box.textContent='';\n"
+            + "    if(!r||!r.ok){box.appendChild(el('div','sh-empty',(r&&r.error)||'读取失败'));return;}\n"
+            + "    if(!r.shares.length){box.appendChild(el('div','sh-empty','当前没有分享链接'));return;}\n"
+            + "    for(var i=0;i<r.shares.length;i++){(function(s){\n"
+            + "      var li=el('div','sh-li');\n"
+            + "      var n=el('span','sh-n',(s.dir?'📁 ':'🎞 ')+s.name+'  ['+s.code+']');li.appendChild(n);\n"
+            + "      var a=el('a','','打开');a.href=s.url;a.target='_blank';a.rel='noopener';li.appendChild(a);\n"
+            + "      var d=el('button','sh-share','撤销');d.type='button';"
+            + "d.onclick=function(){post('/_share/drop',[['code',s.code]],function(){loadList();});};"
+            + "li.appendChild(d);box.appendChild(li);\n"
+            + "    })(r.shares[i]);}\n"
+            + "  });}\n"
+            + "  loadTree();loadList();\n"
+            + "})();\n"
+            + "</script>\n";
+
     private static final String SHARE_JS =
             "<script>\n"
             + "(function(){\n"
@@ -11335,6 +11580,7 @@ public class HttpServer {
           .append("</div></header>\n");
 
         sb.append("<div class='adm-top'><h2>网页端管理</h2>")
+          .append("<a class='adm-back' href='/_share'>链接分享</a>")
           .append("<a class='adm-back' href='/'>返回文件列表</a></div>\n");
 
         if (notice != null && !notice.isEmpty()) {
@@ -11456,11 +11702,13 @@ public class HttpServer {
         sb.append("</div>\n");
 
         sb.append("<div class='adm-foot'>曲库、影视库与书库在修改后自动重扫，不用重启服务。</div>\n");
-        sb.append("</div>\n");
 
         // 账号管理放在最后：它是「配置谁有权改配置」，比目录设置更少用、也更危险，
         // 摆在最下面是为了让手滑误点的概率降到最低。
+        // 必须留在 .wrap 里面：原先它排在闭合 </div> 之后，丢了 max-width:1080px，
+        // 整块比上面所有配置都宽，看着像错位。
         appendUserAdmin(sb, req);
+        sb.append("</div>\n");   // wrap（账号管理也收进来，宽度与上面各区块一致）
 
         // 树上的勾 → 文本框同步。裸 IIFE 要自己包 <script>（这台设备上有壳浏览器
         // 不认 <script src> 之外的注入，包起来最稳）。
