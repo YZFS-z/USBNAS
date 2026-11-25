@@ -12,8 +12,8 @@ android {
         applicationId = "com.littlesauce.usbnaslink"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.0.7"
+        versionCode = 8
+        versionName = "1.0.8"
 
         // 只带 arm 两个 ABI：libmodpdfium.so 单个就 5MB，x86/mips 那几套
         // 纯属陪葬（模拟器才用得上），四个 ABI 全留 APK 会多出 30MB。

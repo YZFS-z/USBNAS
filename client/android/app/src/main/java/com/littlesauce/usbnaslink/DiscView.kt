@@ -2,7 +2,6 @@ package com.littlesauce.usbnaslink
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -39,8 +38,6 @@ class DiscView(ctx: Context) : View(ctx) {
     companion object {
         /** 一整首歌转 6 圈：转太快显得廉价，转太慢又看不出在转 */
         private const val TOTAL_TURNS = 6f
-        /** 30fps 够了；红米这类机器 60fps 绘制 16 个圆也不掉帧，但没必要 */
-        private const val FRAME_MS = 33L
         /** 唱针从盘面抬到驻停位的时长：切歌与暂停共用 */
         private const val ARM_MS = 200L
         /** 暂停时唱针驻停的位置（相对行程），播放时按进度铺满整条行程 */
@@ -48,9 +45,18 @@ class DiscView(ctx: Context) : View(ctx) {
         /** 切歌：旧盘整块滑出 / 新盘整块滑入 */
         private const val SLIDE_OUT_MS = 320L
         private const val SLIDE_IN_MS = 360L
-        /** 唱针行程：针头从盘外缘走到接近轴心的起止半径（相对盘半径 r） */
+        /**
+         * 唱针行程：针头从盘外缘走到最内圈。
+         *
+         * 内圈必须停在**封面贴纸之外**：[COVER_R] 是贴纸半径（盘半径的 0.34），
+         * 原来 TRACK_IN 写 0.30 —— 比贴纸还小，于是一首歌快放完时针尖已经爬到
+         * 封面正中间，看起来像「针扎在海报上」。留到 0.44 才不会压图，同时也
+         * 保住了「越放越靠里」的观感。
+         */
         private const val TRACK_OUT = 0.86f
-        private const val TRACK_IN = 0.30f
+        private const val TRACK_IN = 0.44f
+        /** 中心封面贴纸半径（相对盘半径） */
+        private const val COVER_R = 0.34f
     }
 
     /** 0f..1f，整首歌的位置；由 onProgress 喂进来 */
@@ -59,9 +65,16 @@ class DiscView(ctx: Context) : View(ctx) {
     private var fracAt = 0L
     /** 最近一次回调拿到的位置（毫秒），暂停时就停在这里 */
     private var lastPosMs = 0L
-    /** 上次回调时刻 + 上一帧的推算位置，两次回调之间靠单调时钟续上（见 [recompute]） */
-    private var beatAt = 0L
-    private var beatMs = 0L
+    /**
+     * 时间锚点：`(anchorPosMs, anchorAt)` 是「某个真实时刻在曲目里的位置」。
+     *
+     * 只在 [setProgress] / [setSpinning] 里更新，[recompute] 只读不改。
+     * 曾经这里叫 beatAt/beatMs，而且 recompute 每帧末尾都写 `beatAt = now` ——
+     * 于是下一帧 `now - beatAt` 永远只有 16/33ms，推算位置恒等于「上次回调位置 + 一帧」，
+     * 盘在 200ms 内一动不动、回调一到就跳 200ms 的量，就是「一卡一卡」的机械成因。
+     */
+    private var anchorPosMs = 0L
+    private var anchorAt = 0L
     /** 暂停时为 false：角度不再随时间涨，但用户拖进度条仍然会改 frac */
     private var spinning = false
     private var angleDeg = 0f
@@ -98,13 +111,42 @@ class DiscView(ctx: Context) : View(ctx) {
     private var coverBmp: Bitmap? = null
     /** 当前封面的标识（一般就是曲目路径），换人才重裁 */
     private var coverKey: String? = null
-    /** 裁好的封面着色器，以及它对应的图 oid / 半径 */
-    private var covShader: BitmapShader? = null
+    /**
+     * 裁好的方图，以及它对应的图 oid / 半径。
+     *
+     * 这里**故意不用 BitmapShader**：Shader 的坐标原点锚在画布 (0,0)，而唱片
+     * 中心在 `cx-lr`（横屏时约 367px）。不额外塞 localMatrix 的话，圆里每个像素
+     * 都在采样 bitmap 的 `x=cx-lr .. cx+lr`，早就越过图宽，CLAMP 把它们全钉在
+     * 最右一列上 —— 画出来是一块拉丝的纯色，看起来就是「封面出不来」。
+     * 直接 drawBitmap(dst=coverRect) 让框架自己做缩放，没有坐标系陷阱。
+     */
+    private var covBmp: Bitmap? = null
     private var covKey: String? = null
     private var covR = 0f
-    private val coverPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val coverPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = true
+        isDither = true
+    }
     private val coverClip = Path()
     private val coverRect = RectF()
+
+    /** 背景色与贴纸配色都提到字段里：`Color.parseColor` 每帧调一次是纯浪费 */
+    private val bgColor = Color.parseColor("#0B0F14")
+    private val labelHi = Color.parseColor("#1F5FC4")
+    private val labelLo = Color.parseColor("#123A78")
+    private val labelSub = Color.parseColor("#AFC3DC")
+    private val labelMain = Color.parseColor("#E6E9EF")
+
+    /**
+     * 着色器建好时的几何。盘体/高光两个 shader 的圆心与半径是烘进去的，
+     * 窗口一变（横竖屏、分屏）就得重建成新的，否则渐变会错位成「光斑贴在角落」。
+     */
+    private var shaderR = 0f
+    private var shaderCx = 0f
+    private var shaderCy = 0f
+
+    /** 贴纸渐变是按半径烘的，半径没变就不用重建（每帧 new LinearGradient 是白烧） */
+    private var labelR = 0f
 
     private val disc = Paint(Paint.ANTI_ALIAS_FLAG)
     private val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -129,10 +171,6 @@ class DiscView(ctx: Context) : View(ctx) {
         color = Color.parseColor("#E6E9EF")
         textAlign = Paint.Align.CENTER
         isSubpixelText = true
-    }
-    private val notePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#C85AA9FF")
-        textAlign = Paint.Align.CENTER
     }
     private val path = Path()
     private val arcRect = RectF()
@@ -176,10 +214,10 @@ class DiscView(ctx: Context) : View(ctx) {
         totalMsForArm = totalMs
         lastPosMs = posMs
         val now = SystemClock.elapsedRealtime()
-        // 位置与时刻成对更新，且 new beat 不许比上一帧的推算值更靠前（回调有几十毫秒抖动）
-        val predicted = beatMs + (now - beatAt)
-        beatMs = if (Math.abs(posMs - predicted) > 700L) posMs else Math.max(posMs, predicted)
-        beatAt = now
+        // 位置与时刻成对更新，且新锚点不许比上一帧的推算值更靠前（回调有几十毫秒抖动）
+        val predicted = anchorPosMs + (now - anchorAt)
+        anchorPosMs = if (Math.abs(posMs - predicted) > 700L) posMs else Math.max(posMs, predicted)
+        anchorAt = now
         if (!spinning) frac = (posMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
         recompute()
         invalidate()
@@ -190,12 +228,12 @@ class DiscView(ctx: Context) : View(ctx) {
         if (spinning == on) return
         val now = SystemClock.elapsedRealtime()
         if (on) {
-            // 从暂停恢复：以暂停时的位置起算，不要用旧的 beatAt 一次性补上一大段
-            beatMs = lastPosMs
-            beatAt = now
+            // 从暂停恢复：以暂停时的位置起算，不要用旧锚点一次性补上一大段
+            anchorPosMs = lastPosMs
+            anchorAt = now
         } else {
             // 暂停：把推算位置定格这一次，之后再也不会因为时钟前进而转身
-            lastPosMs = beatMs.coerceAtLeast(0L)
+            lastPosMs = anchorPosMs.coerceAtLeast(0L)
             frac = if (totalMsForArm > 0L) (lastPosMs.toFloat() / totalMsForArm.toFloat()).coerceIn(0f, 1f) else frac
         }
         fracAt = now
@@ -259,10 +297,18 @@ class DiscView(ctx: Context) : View(ctx) {
         coverKey = key
         coverBmp = bmp
         covR = 0f
+        // 没封面可画时把上一张的缩放副本放掉，否则切到「无封面」的曲子会一直
+        // 攥着一张用不到的位图（滑出阶段用的 oldCover 不在这里动，它还要画）
+        if (bmp == null) {
+            val stale = covBmp
+            covBmp = null
+            covKey = null
+            if (stale != null && stale !== oldCover && !stale.isRecycled) stale.recycle()
+        }
         invalidate()
     }
 
-    /** 着色器缓存按图自身的 oid 认图：滑出期间新旧两张同时在场，各留一套不互相顶掉 */
+    /** 缩放副本按图自身的 oid 认图：滑出期间新旧两张同时在场，各留一套不互相顶掉 */
     private fun skinOf(src: Bitmap): String = System.identityHashCode(src).toString()
 
     override fun onDraw(canvas: Canvas) {
@@ -274,37 +320,43 @@ class DiscView(ctx: Context) : View(ctx) {
         val r = Math.min(w, h) / 2f - dp(4).toFloat()
         if (r <= 1f) return
 
-        canvas.drawColor(Color.parseColor("#0B0F14"))
+        canvas.drawColor(bgColor)
 
         // 切歌动画：**只有唱片平移**，唱针是固定在机身上的机构，不跟着走 ——
         // 真实留声机换唱片时，盘从叉架上下来/上去，音臂原地不动。
         //
         // 方向约定（这是「动效连贯」的关键）：
-        //   dir = +1 表示「下一首」（内容往左走，像看片时往后翻一页）
-        //   dir = -1 表示「上一首」（内容往右走）
-        // 旧盘朝 dir 的反方向滑出（-dir），新盘必须从**同一侧**接上来，
-        // 也就是继续朝 -dir 走：入场位移为 -dir*w*(1-e)，e 从 0 到 1 时它从
-        // 屏幕外滑回 0。反过来写成 +dir 就会变成「旧盘从左边出去、新盘又从
-        // 左边弹进来」，两段动画互相抵消，看起来像卡了一下再重放。
+        //   dir = +1 表示「下一首」：旧盘往左滑出，新盘从**右边**滑进来
+        //   dir = -1 表示「上一首」：旧盘往右滑出，新盘从**左边**滑进来
+        // 也就是两个阶段用同一个符号 dir，只是阶段不同：
+        //   滑出：dx 从 0 → -dir*w   （下一首：0 → -w，向左出画）
+        //   滑入：dx 从 +dir*w → 0   （下一首：+w → 0，从右侧接上来）
+        // 曾经把滑入写成 `-dir*w*(1-e)`，等于新盘也停在左边、原路倒回原位，
+        // 视觉上像「旧盘出去又自己退回来」，完全不是翻页的连贯感。
         val sliding = flip < 1f
         if (sliding) {
             val e = easeInOut(flip)
             val dx = if (flipOut) -w * e * dir        // 旧盘：从 0 滑到 -dir*w（完全出画）
-            else -dir * w * (1f - e)                  // 新盘：从 -dir*w 滑回 0
+            else dir * w * (1f - e)                   // 新盘：从 +dir*w 滑回 0
             canvas.save()
             canvas.translate(dx, 0f)
         }
 
         // 盘体：中心偏亮、边缘吸光的径向渐变，模拟黑胶。
         // 渐变的颜色数组只建一次：每帧 new RadialGradient 会让 Skia 每帧重建一次着色器，
-        // 是转起来一顿一顿的主因之一。
-        if (disc.shader == null) {
+        // 是转起来一顿一顿的主因之一。但几何（圆心/半径）是烘进 shader 里的，
+        // 窗口一变就得重建 —— 只判 `shader == null` 会让横竖屏切换后光斑错位到角落。
+        val geoMoved = shaderR != r || shaderCx != cx || shaderCy != cy
+        if (disc.shader == null || geoMoved) {
             disc.shader = android.graphics.RadialGradient(
                 cx, cy, r,
                 intArrayOf(Color.parseColor("#3A424D"), Color.parseColor("#171E26"), Color.parseColor("#0C1117")),
                 floatArrayOf(0f, 0.62f, 1f),
                 Shader.TileMode.CLAMP
             )
+            shaderR = r
+            shaderCx = cx
+            shaderCy = cy
         }
         canvas.drawCircle(cx, cy, r, disc)
 
@@ -319,7 +371,7 @@ class DiscView(ctx: Context) : View(ctx) {
 
         // 高光：一道跟着转的扫掠渐变，灯光掠过盘面。
         // 同样只建一次（见盘体那段注释），旋转靠 canvas.rotate
-        if (sheen.shader == null) {
+        if (sheen.shader == null || geoMoved) {
             sheen.shader = SweepGradient(
                 cx, cy,
                 intArrayOf(
@@ -336,17 +388,21 @@ class DiscView(ctx: Context) : View(ctx) {
         canvas.restore()
 
         // 中心：有封面贴封面，没有就画蓝贴纸（印歌名 + 歌手）
-        val lr = r * 0.34f
+        val lr = r * COVER_R
         // 滑出那一段用「切歌前那张封面」，否则旧盘中央会先变成默认贴纸
         val cov = if (flipOut) oldCover else coverBmp
         if (cov != null && !cov.isRecycled) {
             paintCover(canvas, cov, cx, cy, lr)
         } else {
-            label.shader = LinearGradient(
-                cx - lr, cy - lr, cx + lr, cy + lr,
-                intArrayOf(Color.parseColor("#1F5FC4"), Color.parseColor("#123A78")),
-                null, Shader.TileMode.CLAMP
-            )
+            // 贴纸渐变按 lr 缓存：每帧 new LinearGradient 会白建一次着色器
+            if (labelR != lr || label.shader == null) {
+                label.shader = LinearGradient(
+                    cx - lr, cy - lr, cx + lr, cy + lr,
+                    intArrayOf(labelHi, labelLo),
+                    null, Shader.TileMode.CLAMP
+                )
+                labelR = lr
+            }
             canvas.drawCircle(cx, cy, lr, label)
             canvas.drawCircle(cx, cy, lr, labelRing)
 
@@ -355,11 +411,11 @@ class DiscView(ctx: Context) : View(ctx) {
             val t1 = notes.getOrNull(0).orEmpty().take(8)
             val t2 = notes.getOrNull(1).orEmpty().take(10)
             textPaint.textSize = lr * 0.30f
+            textPaint.color = labelMain
             if (t1.isNotEmpty()) canvas.drawText(t1, cx, cy - lr * 0.10f, textPaint)
             textPaint.textSize = lr * 0.22f
-            textPaint.color = Color.parseColor("#AFC3DC")
+            textPaint.color = labelSub
             if (t2.isNotEmpty()) canvas.drawText(t2, cx, cy + lr * 0.34f, textPaint)
-            textPaint.color = Color.parseColor("#E6E9EF")
             canvas.restore()
         }
 
@@ -374,23 +430,25 @@ class DiscView(ctx: Context) : View(ctx) {
         if (sliding) canvas.restore()
 
         drawArm(canvas, cx, cy, r)
-        drawNotes(canvas, cx, cy, r)
 
         // 还在转、或者有动画没跑完，就继续排帧；其余时候停掉，
-        // 省电，也省得 uiautomator 永远等不到 idle
-        if (spinning || flip < 1f || armMoving()) postInvalidateDelayed(FRAME_MS)
+        // 省电，也省得 uiautomator 永远等不到 idle。
+        // 用 postInvalidateOnAnimation 而不是固定 33ms：33ms 与这块屏 16.67ms 的 vsync
+        // 不同频，会出现「某帧等两拍、某帧等一拍」，看起来一快一慢。交给 vsync 后
+        // 转速只由 angleDeg 决定，与帧率彻底解耦。
+        if (spinning || flip < 1f || armMoving()) postInvalidateOnAnimation()
     }
 
-    /** 封面：裁内切正方形 → 缩到盘中心直径 → 贴进圆里（贴纸环压住边缘） */
+    /** 圆到哪张图，就直接用 drawBitmap 铺满 coverRect：坐标系跟画布同一套，不会再错位 */
     private fun paintCover(canvas: Canvas, src: Bitmap, cx: Float, cy: Float, lr: Float) {
         if (src.isRecycled) {
             if (src === coverBmp) setCover(null, "none:recycled")
             return
         }
-        // 两张图同时在场（滑出用的是旧封面），着色器按「图」各留一套
+        // 两张图同时在场（滑出用的是旧封面），裁好的方图按「图」各留一套
         val key = skinOf(src)
         val d = (lr * 2f).toInt().coerceAtLeast(8)
-        if (key != covKey || covR != lr || covShader == null) {
+        if (key != covKey || covR != lr || covBmp == null) {
             val side = Math.min(src.width, src.height)
             if (side <= 0) return
             val x0 = (src.width - side) / 2
@@ -398,11 +456,14 @@ class DiscView(ctx: Context) : View(ctx) {
             val sq = Bitmap.createBitmap(src, x0, y0, side, side)
             val scaled = Bitmap.createScaledBitmap(sq, d, d, true)
             if (sq != src && sq != scaled) sq.recycle()
-            covShader = BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            // 上一张的缩放副本已经画完这一帧了，换新的之前收掉，别越切越涨
+            val old = covBmp
+            if (old != null && old != scaled && !old.isRecycled) old.recycle()
+            covBmp = scaled
             covKey = key
             covR = lr
         }
-        coverPaint.shader = covShader
+        val pic = covBmp ?: return
         coverRect.set(cx - lr, cy - lr, cx + lr, cy + lr)
         canvas.save()
         coverClip.reset()
@@ -410,7 +471,7 @@ class DiscView(ctx: Context) : View(ctx) {
         canvas.clipPath(coverClip)
         // 封面跟盘一起转：转的是圆里的图，视觉上是「贴纸在转」
         canvas.rotate(angleDeg, cx, cy)
-        canvas.drawRect(coverRect, coverPaint)
+        canvas.drawBitmap(pic, null, coverRect, coverPaint)
         canvas.restore()
         canvas.drawCircle(cx, cy, lr, labelRing)
     }
@@ -461,25 +522,6 @@ class DiscView(ctx: Context) : View(ctx) {
         canvas.drawCircle(tipX, tipY, Math.max(4f, 4.5f * resources.displayMetrics.density), labelRing)
     }
 
-    /** 飘音符：播放时绕盘外侧缓慢上升 */
-    private fun drawNotes(canvas: Canvas, cx: Float, cy: Float, r: Float) {
-        if (!spinning) return
-        notePaint.textSize = dp(15).toFloat()
-        val phase = (SystemClock.elapsedRealtime() % 4000L) / 4000f
-        for (i in 0..2) {
-            val ph = (phase + i / 3f) % 1f
-            val na = angleDeg * 0.35f + i * 120f
-            val rad = Math.toRadians(na.toDouble())
-            val dist = r * (1.02f + 0.16f * ph)
-            val nx = cx + (dist * Math.cos(rad)).toFloat()
-            val ny = cy + (dist * Math.sin(rad)).toFloat() - dp(10).toFloat() * ph
-            notePaint.alpha = ((1f - ph) * 190f).toInt()
-            if (notePaint.alpha > 8) {
-                canvas.drawText(if (i % 2 == 0) "♪" else "♫", nx, ny, notePaint)
-            }
-        }
-    }
-
     // ---------- 唱针动画 ----------
 
     /** 把唱针的目标位置改成 [to]（0 贴盘 / 1 驻停位），从当前位置起步 */
@@ -509,25 +551,17 @@ class DiscView(ctx: Context) : View(ctx) {
      *  - 时钟腿：同一角速度 `360 * TOTAL_TURNS / 216000` 度每毫秒。
      * 两个 perMs 一乘，`frac * totalMs` 和 `elapsed * 216000` 都是「毫秒」单位 ——
      * 只有总时长恰好 3 分钟时二者才相等，否则每 200ms 回调一次就错开一截，肉眼就是抖。
-     * 这里把进度腿改写成同一只米尺（见 [beatMs]）。
+     * 这里把进度腿改写成同一只米尺（见 [anchorPosMs]）。
      */
     private fun recompute() {
         val now = SystemClock.elapsedRealtime()
         val totalS = totalMsForArm / 1000f
         // 时间插值：按「整首歌 6 圈」折算成每秒多少度
         val perMs = 360f * TOTAL_TURNS / 216000f // 以 3 分钟一首为基准
-        if (spinning) {
-            // 两次回调之间用单调时钟补齐：这条腿连续，抽帧也不会顿
-            beatMs = if (totalMsForArm > 0L) {
-                lastPosMs + (now - beatAt)
-            } else {
-                beatMs + (now - beatAt)
-            }
-        }
-        beatAt = now
 
-        val posMs = if (spinning) beatMs.coerceAtLeast(0L) else lastPosMs
-        // 位置 → 角度：同一条 6 圈尺子；乘 216000/实际总时长 让「进度腿」与下面「时钟腿」同速
+        // 用锚点连续推算，绝不在这里改锚点：改了就等于每帧把插值清零（见字段注释）
+        val posMs = if (spinning) (anchorPosMs + (now - anchorAt)).coerceAtLeast(0L) else lastPosMs
+        // 位置 → 角度：同一条 6 圈尺子；乘 216000/实际总时长 让「进度腿」与「时钟腿」同速
         val scale = if (totalS > 1f) 216000f / totalMsForArm.toFloat() else 1f
         angleDeg = posMs.toFloat() * perMs * scale
 
@@ -553,10 +587,10 @@ class DiscView(ctx: Context) : View(ctx) {
                     val cb = flipOutDone
                     flipOutDone = null
                     cb?.invoke()
-                    // 新曲的时长/位置要等下一次 onProgress 才到，这里先把两条腿对齐成
-                    // 「从 0 开始」，否则新盘会带着上一首的 beatMs 先窜一下再被拉回来
-                    beatAt = SystemClock.elapsedRealtime()
-                    beatMs = lastPosMs
+                    // 新曲的时长/位置要等下一次 onProgress 才到，这里先把锚点对齐成
+                    // 「从当前位置开始」，否则新盘会带着上一首的已播量先窜一下再被拉回来
+                    anchorAt = SystemClock.elapsedRealtime()
+                    anchorPosMs = 0L
                 } else {
                     // 滑回来了：旧封面可以丢了，唱针按当前播放状态落位
                     flip = 1f

@@ -8,6 +8,7 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.List;
 
 /**
@@ -17,25 +18,39 @@ import java.util.List;
  * 曲库在手机上，系统播放器要一次一次拿 URL、拿不到播放列表，也就没有
  * 「上一首/下一首/单曲循环」。
  *
- * 解码三档回退：
+ * 解码两档回退，而且两档都留在窗口里：
  *   1. {@link VlcEngine}（libvlc）—— mp3/flac/m4a/ogg/ape 全都吃，还能 seek
  *   2. Java Sound 的 {@link javax.sound.sampled.SourceDataLine} —— 只解 WAV
- *   3. 系统默认播放器 —— 上面两档都不行时的兜底
+ *
+ * 以前还有第三档「交给系统默认播放器」，那是错的：点一首歌就跳出浏览器，
+ * 曲目列表、进度、歌词全部断掉，正是用户反馈的「电脑端音乐播放跳转到浏览器」。
+ * 现在两档都失败也只在窗口里写清楚原因，不往外甩。
  *
  * 播放列表、循环模式、歌词抓取都在这里驱动；歌词渲染交给 {@link LyricWindow}。
  */
 final class PlayerWindow extends JFrame {
 
     private final Music.Playlist list = new Music.Playlist();
+    /** 悬浮歌词条（独立的置顶小窗，可关） */
     private final LyricWindow lyrics = new LyricWindow();
+    /** 窗口内的大字歌词，跟手机播放页一样占住右侧 */
+    private final LrcView lrc = new LrcView();
+    /** 唱片 */
+    private final DiscPanel disc = new DiscPanel();
 
     private final JLabel title = new JLabel("未在播放", SwingConstants.CENTER);
     private final JLabel sub = new JLabel(" ", SwingConstants.CENTER);
     private final JProgressBar bar = new JProgressBar();
     private final JLabel timeText = new JLabel("00:00 / 00:00");
-    private final JButton prevBtn = Theme.ghost("上一首");
+    /**
+     * 三颗主控键用 control() 而不是 ghost()：
+     * ghost 的底色就是窗口底色，日间主题下 #f2f4f7 底配 #57606a 字，
+     * 摆在别的东西旁边像三颗灰掉的占位按钮。control 是实底卡片 + 亮描边。
+     */
+    private final JButton prevBtn = Theme.control("上一首");
     private final JButton playBtn = Theme.primary("播放");
-    private final JButton nextBtn = Theme.ghost("下一首");
+    private final JButton nextBtn = Theme.control("下一首");
+    private final JLabel offsetText = new JLabel("0.0s");
     private final JComboBox<Music.Mode> modeBox = Theme.combo(Music.Mode.values());
     private final JCheckBox lyricBox = Theme.check("桌面歌词", false);
     private final DefaultListModel<Track> model = new DefaultListModel<>();
@@ -55,19 +70,29 @@ final class PlayerWindow extends JFrame {
     PlayerWindow() {
         super("USBNASLink — 正在播放");
         setDefaultCloseOperation(WindowConstants.HIDE_ON_CLOSE);
-        setSize(560, 460);
+        setSize(900, 640);
+        setMinimumSize(new Dimension(720, 520));
         setLocationRelativeTo(null);
 
         JPanel root = new JPanel(new BorderLayout(0, 10));
         root.setBackground(Theme.BG_DEEP);
         root.setBorder(new EmptyBorder(16, 18, 14, 18));
 
-        title.setFont(Theme.bold(17));
+        // ---- 左：唱片 ----
+        JPanel left = new JPanel(new BorderLayout());
+        left.setOpaque(false);
+        left.setPreferredSize(new Dimension(360, 0));
+        left.add(disc, BorderLayout.CENTER);
+
+        // ---- 右：标题 / 歌词 / 进度 / 按键 ----
+        title.setFont(Theme.bold(21));
         title.setForeground(Theme.FG_TITLE);
+        title.setHorizontalAlignment(SwingConstants.LEFT);
         sub.setFont(Theme.ui(12));
         sub.setForeground(Theme.FG_DIM);
+        sub.setHorizontalAlignment(SwingConstants.LEFT);
 
-        JPanel head = new JPanel(new BorderLayout(0, 4));
+        JPanel head = new JPanel(new BorderLayout(0, 6));
         head.setOpaque(false);
         head.add(title, BorderLayout.NORTH);
         head.add(sub, BorderLayout.SOUTH);
@@ -77,14 +102,71 @@ final class PlayerWindow extends JFrame {
         bar.setValue(0);
         timeText.setFont(Theme.mono(11));
         timeText.setForeground(Theme.FG_SUB);
-        timeText.setHorizontalAlignment(SwingConstants.CENTER);
+        timeText.setHorizontalAlignment(SwingConstants.LEFT);
 
-        JPanel center = new JPanel(new BorderLayout(0, 4));
-        center.setOpaque(false);
-        center.add(bar, BorderLayout.NORTH);
-        center.add(timeText, BorderLayout.SOUTH);
-        center.add(qList, BorderLayout.CENTER);
+        // 主控键做宽一点：手机上是四颗等宽大键，桌面这里用固定宽度对齐
+        Dimension big = new Dimension(96, 38);
+        for (JButton b : new JButton[]{prevBtn, playBtn, nextBtn}) {
+            b.setPreferredSize(b == playBtn ? new Dimension(116, 38) : big);
+        }
 
+        // 工具行：桌面歌词开关 + 歌词位移（音词不同步时手动拨）
+        JButton earlier = Theme.control("歌词提前");
+        JButton later = Theme.control("歌词延后");
+        JButton resetOff = Theme.control("归零");
+        offsetText.setFont(Theme.mono(11));
+        offsetText.setForeground(Theme.FG_SUB);
+        offsetText.setToolTipText("歌词时间轴偏移量，±10 秒以内，重启后保留");
+
+        JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        tools.setOpaque(false);
+        tools.add(lyricBox);
+        tools.add(earlier);
+        tools.add(offsetText);
+        tools.add(later);
+        tools.add(resetOff);
+
+        // 主控键靠左、循环模式靠右。原来两样都塞进一条 FlowLayout，
+        // 窗口一窄 combo 就被折到第二行 —— 而这一行的首选高度只有一行，
+        // 折下去的部分直接被裁掉（探针里 combo 的 y=32 而父面板高 32）。
+        JPanel ctl = new JPanel(new BorderLayout(10, 0));
+        ctl.setOpaque(false);
+        JPanel ctlLeft = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        ctlLeft.setOpaque(false);
+        ctlLeft.add(prevBtn);
+        ctlLeft.add(playBtn);
+        ctlLeft.add(nextBtn);
+        ctl.add(ctlLeft, BorderLayout.CENTER);
+        ctl.add(modeBox, BorderLayout.EAST);
+
+        JPanel mid = new JPanel(new BorderLayout(0, 10));
+        mid.setOpaque(false);
+        mid.setBorder(new EmptyBorder(4, 16, 0, 0));
+        mid.add(head, BorderLayout.NORTH);
+        mid.add(lrc, BorderLayout.CENTER);
+
+        JPanel prog = new JPanel(new BorderLayout(0, 4));
+        prog.setOpaque(false);
+        prog.add(bar, BorderLayout.NORTH);
+        prog.add(timeText, BorderLayout.SOUTH);
+
+        JPanel rightBottom = new JPanel(new BorderLayout(0, 10));
+        rightBottom.setOpaque(false);
+        rightBottom.add(prog, BorderLayout.NORTH);
+        rightBottom.add(ctl, BorderLayout.CENTER);
+        rightBottom.add(tools, BorderLayout.SOUTH);
+
+        JPanel right = new JPanel(new BorderLayout(0, 10));
+        right.setOpaque(false);
+        right.add(mid, BorderLayout.CENTER);
+        right.add(rightBottom, BorderLayout.SOUTH);
+
+        JPanel stage = new JPanel(new BorderLayout(16, 0));
+        stage.setOpaque(false);
+        stage.add(left, BorderLayout.WEST);
+        stage.add(right, BorderLayout.CENTER);
+
+        // ---- 底：播放列表（高度固定，可滚）----
         qList.setBackground(Theme.BG_CARD);
         qList.setForeground(Theme.FG_TEXT);
         qList.setSelectionBackground(Theme.BG_SEL);
@@ -114,19 +196,13 @@ final class PlayerWindow extends JFrame {
                 }
             }
         });
+        JScrollPane qsp = new JScrollPane(qList);
+        qsp.setPreferredSize(new Dimension(0, 132));
+        qsp.setBorder(BorderFactory.createLineBorder(Theme.LINE, 1, true));
+        qsp.getVerticalScrollBar().setUnitIncrement(18);
 
-        JPanel ctl = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
-        ctl.setOpaque(false);
-        ctl.add(prevBtn);
-        ctl.add(playBtn);
-        ctl.add(nextBtn);
-        ctl.add(new JLabel(" "));
-        ctl.add(modeBox);
-        ctl.add(lyricBox);
-
-        root.add(head, BorderLayout.NORTH);
-        root.add(center, BorderLayout.CENTER);
-        root.add(ctl, BorderLayout.SOUTH);
+        root.add(stage, BorderLayout.CENTER);
+        root.add(qsp, BorderLayout.SOUTH);
         setContentPane(root);
 
         prevBtn.addActionListener(e -> {
@@ -147,13 +223,41 @@ final class PlayerWindow extends JFrame {
             else lyrics.setVisible(false);
         });
 
+        // 歌词位移：每次 ±0.5 秒，浮窗与窗口内歌词读的是同一份偏移
+        earlier.addActionListener(e -> bumpOffset(-500));
+        later.addActionListener(e -> bumpOffset(+500));
+        resetOff.addActionListener(e -> {
+            LrcView.setOffsetMs(0);
+            lrc.refresh();
+            lyrics.refresh();
+            offsetText.setText(LrcView.offsetLabel());
+        });
+        lrc.setOnOffsetChanged(() -> offsetText.setText(LrcView.offsetLabel()));
+        offsetText.setText(LrcView.offsetLabel());
+
         ticker = new Timer(200, e -> onTick());
         ticker.setRepeats(true);
     }
 
-    /** 播放/暂停切换时只换字，不换 UI —— 按钮圆角底色由 FlatButtonUI 自绘 */
+    /** 歌词位移：正数 = 歌词往后推（字幕变慢），负数 = 提前。 */
+    private void bumpOffset(int deltaMs) {
+        offsetText.setText(lrc.nudge(deltaMs));
+        // 悬浮条走的是同一份静态偏移，但它的 cur 缓存要清一下才会立刻重画
+        lyrics.refresh();
+    }
+
+    /**
+     * 播放/暂停切换时只换字，不换 UI —— 按钮圆角底色由 FlatButtonUI 自绘。
+     * 顺带把唱片的转动挂到同一个状态上：文字是「暂停」就说明正在放。
+     */
     private void setPlayLabel(String text) {
         playBtn.setText(text);
+        disc.setSpinning("暂停".equals(text));
+    }
+
+    /** 给自动化探针用：从当前选中项开始播 */
+    void playFirst() {
+        playCurrent();
     }
 
     void setTarget(String base, String sid) {
@@ -248,6 +352,9 @@ final class PlayerWindow extends JFrame {
         qList.setSelectedIndex(list.index);
         bar.setValue(0);
         timeText.setText("00:00 / 00:00");
+        disc.setTip(nm);
+        disc.setProgress(0, 0);
+        loadCover(t);
 
         final String base = baseUrl;
         final String ck = cookie;
@@ -258,7 +365,7 @@ final class PlayerWindow extends JFrame {
 
         String audio = Music.audioUrl(base, t.path);
 
-        // 一档：libvlc
+        // 一档：libvlc —— 唯一能让 mp3/flac/m4a/ape 在这个窗口里出声的路径
         VlcEngine e = engine();
         if (e != null) {
             if (e.play(audio, ck)) {
@@ -269,13 +376,19 @@ final class PlayerWindow extends JFrame {
                 loadLyrics(base, ck, t);
                 return;
             }
-            sub.setText("libvlc 打不开，改用内置解码");
+            // play() 返回 false 只说明这次没起来（多半是流连不上，或者服务端
+            // 那边还没把这首歌扫出来）。以前这里会掉到「打开浏览器」，用户看到
+            // 的就是「点一首歌就跳出浏览器」—— 现在改成留在窗口里说清楚。
+            sub.setText("这首歌没打开（网络或服务端未就绪），点播放再试一次");
+            loadLyrics(base, ck, t);
+            return;
         }
 
-        // 二档：Java Sound（只有 WAV）
+        // 二档：Java Sound（只有 WAV）—— 本机没有 libvlc 时唯一的兜底，
+        // 而且必须留在窗口里播：跳浏览器就没有曲目列表、没有进度、没有歌词。
         if (!isWav(t.name)) {
-            sub.setText("已交给系统播放器打开（本机没有可用的 libvlc，内置解码只认 WAV）");
-            openExternal(audio);
+            sub.setText("本机没有可用的 VLC 运行时（vlc 目录要在程序目录下），"
+                    + "内置解码只认 WAV，这首放不了");
             loadLyrics(base, ck, t);
             return;
         }
@@ -290,8 +403,7 @@ final class PlayerWindow extends JFrame {
                                 javax.sound.sampled.SourceDataLine.class, ais.getFormat());
                 if (!javax.sound.sampled.AudioSystem.isLineSupported(info)) {
                     SwingUtilities.invokeLater(() ->
-                            sub.setText("声卡不支持这个格式，已交给系统播放器"));
-                    openExternal(audio);
+                            sub.setText("声卡不支持这个格式（本机只在有 libvlc 时才能播非 WAV）"));
                     loadLyrics(base, ck, t);
                     return;
                 }
@@ -333,8 +445,7 @@ final class PlayerWindow extends JFrame {
                 SwingUtilities.invokeLater(this::onEnded);
             } catch (Throwable ex) {
                 SwingUtilities.invokeLater(() -> {
-                    sub.setText("内置播放失败：" + ex.getMessage() + "（已交给系统播放器）");
-                    openExternal(audio);
+                    sub.setText("内置播放失败：" + ex.getMessage());
                 });
             }
         }, "usbnas-play");
@@ -356,15 +467,41 @@ final class PlayerWindow extends JFrame {
         if (t != null) playCurrent();
     }
 
+    /**
+     * 拉歌词：一份正文喂两个渲染器（窗口内大字 + 桌面浮窗），
+     * 两边的偏移量读的是同一份 {@link LrcView#offsetMs()}。
+     */
     private void loadLyrics(String base, String ck, Track t) {
         if (!t.hasLyrics()) {
-            SwingUtilities.invokeLater(() -> lyrics.clear());
+            SwingUtilities.invokeLater(() -> {
+                lrc.clear();
+                lyrics.clear();
+            });
             return;
         }
         Thread th = new Thread(() -> {
-            String lrc = Music.fetchLyrics(base, ck, t.path, 8000);
-            SwingUtilities.invokeLater(() -> lyrics.setLrc(lrc));
+            String raw = Music.fetchLyrics(base, ck, t.path, 8000);
+            SwingUtilities.invokeLater(() -> {
+                lrc.setLrc(raw);
+                lyrics.setLrc(raw);
+            });
         }, "usbnas-lrc");
+        th.setDaemon(true);
+        th.start();
+    }
+
+    /** 拉封面：内嵌封面走 /cover?f=，同目录同名图走普通 GET，都没有就保持默认贴纸 */
+    private void loadCover(Track t) {
+        disc.setCover(null);
+        if (t == null || !t.hasCover()) return;
+        final String base = baseUrl;
+        final String ck = cookie;
+        final String url = t.coverUrl(base);
+        if (url == null || url.isEmpty()) return;
+        Thread th = new Thread(() -> {
+            BufferedImage img = DiscPanel.download(url, ck);
+            if (img != null) SwingUtilities.invokeLater(() -> disc.setCover(img));
+        }, "usbnas-cover");
         th.setDaemon(true);
         th.start();
     }
@@ -384,7 +521,9 @@ final class PlayerWindow extends JFrame {
         bar.setMaximum(1000);
         bar.setValue(total > 0 ? (int) Math.min(1000, p * 1000 / total) : 0);
         timeText.setText(fmt(p) + " / " + fmt(total));
+        lrc.tick(p);
         lyrics.tick(p);
+        disc.setProgress(p, total);
     }
 
     private void closeClip() {

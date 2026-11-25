@@ -33,13 +33,24 @@ import java.awt.RenderingHints;
  */
 final class FlatButtonUI extends BasicButtonUI {
 
+    /** 0 = 次按钮（ghost），1 = 主按钮（primary），2 = 控件按钮（control） */
+    static final int GHOST = 0;
+    static final int PRIMARY = 1;
+    static final int CONTROL = 2;
+
+    private final int style;
     private final boolean primary;
     private int arc = 9;
     private int padH = 14;
     private int padV = 7;
 
     FlatButtonUI(boolean primary) {
-        this.primary = primary;
+        this(primary ? PRIMARY : GHOST);
+    }
+
+    FlatButtonUI(int style) {
+        this.style = style;
+        this.primary = style == PRIMARY;
     }
 
     FlatButtonUI arc(int a) {
@@ -79,7 +90,14 @@ final class FlatButtonUI extends BasicButtonUI {
             Color edge;
             Color text;
 
-            if (primary) {
+            if (style == CONTROL) {
+                // 播放器那排按键：实底卡片色 + 亮描边 + 主文字色。
+                // 用 ghost 的「底色 = 窗口底色」在日间主题下就是白底灰字，
+                // 跟旁边的大标题摆一起像未启用的控件；这里必须自己撑出层次。
+                fill = !on ? Theme.BG_HOVER : down ? Theme.BG_SEL : hot ? Theme.BG_HOVER : Theme.BG_CARD;
+                edge = !on ? Theme.LINE : hot ? Theme.BRAND_LINK : Theme.LINE_SOFT;
+                text = on ? Theme.FG_TITLE : Theme.FG_MUTE;
+            } else if (primary) {
                 fill = !on ? Theme.BG_HOVER : down ? Theme.BRAND_DIM : hot ? Theme.BRAND_DIM : Theme.BRAND;
                 edge = fill;
                 text = on ? Color.WHITE : Theme.FG_MUTE;
@@ -144,6 +162,23 @@ final class FlatButtonUI extends BasicButtonUI {
     static JButton ghost(String text) {
         JButton b = new JButton(text);
         b.setUI(new FlatButtonUI(false));
+        b.setFont(Theme.ui(13));
+        b.setFocusPainted(false);
+        b.setContentAreaFilled(false);
+        b.setOpaque(false);
+        b.setBorderPainted(false);
+        b.setRolloverEnabled(true);
+        return b;
+    }
+
+    /**
+     * 实体控件按钮：卡片底 + 描边 + 主文字色。
+     * 播放器窗口的「上一首 / 播放 / 下一首」用它 —— ghost 那种底色同窗口的做法
+     * 在日间主题下就是白底灰字，跟旁边的大标题摆一起像三个未启用的占位。
+     */
+    static JButton control(String text) {
+        JButton b = new JButton(text);
+        b.setUI(new FlatButtonUI(CONTROL));
         b.setFont(Theme.ui(13));
         b.setFocusPainted(false);
         b.setContentAreaFilled(false);

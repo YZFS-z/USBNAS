@@ -3,6 +3,8 @@ package com.littlesauce.usbnaslink.desktop;
 import com.littlesauce.usbnaslink.Book;
 import com.littlesauce.usbnaslink.BookLib;
 import com.littlesauce.usbnaslink.Music;
+import com.littlesauce.usbnaslink.Photo;
+import com.littlesauce.usbnaslink.PhotoLib;
 import com.littlesauce.usbnaslink.Session;
 import com.littlesauce.usbnaslink.Track;
 import com.littlesauce.usbnaslink.Video;
@@ -11,7 +13,9 @@ import com.littlesauce.usbnaslink.VideoLib;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.LineBorder;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
@@ -53,12 +57,18 @@ final class LibraryPanel extends JPanel {
     private final JPanel content = new JPanel();
     private final JPanel musicContent = new JPanel();
     private final JPanel bookContent = new JPanel();
+    private final JPanel photoContent = new JPanel();
     private final JLabel hint = new JLabel(" ");
     private final JTextField filter = new JTextField();
-    private final JTabbedPane tabs = new JTabbedPane();
+    /**
+     * 走 Theme.tabs() 而不是裸 new JTabbedPane()：裸构造会落到系统 LAF 的
+     * MetalTabbedPaneUI，页签是圆角亮块 + 深灰字，跟窗口其它自绘控件两个世界。
+     */
+    private final JTabbedPane tabs = Theme.tabs();
     private final JPanel videoHost = new JPanel(new BorderLayout());
     private final JPanel musicHost = new JPanel(new BorderLayout());
     private final JPanel bookHost = new JPanel(new BorderLayout());
+    private final JPanel photoHost = new JPanel(new BorderLayout());
 
     private volatile String baseUrl = "";
     private volatile String cookie = null;
@@ -66,12 +76,15 @@ final class LibraryPanel extends JPanel {
     private volatile VideoLib.Lib vlib;
     private volatile Music.Lib mlib;
     private volatile BookLib.Lib blib;
+    private volatile PhotoLib.Lib plib;
     /** 音乐页签内部的三种看法：0=平铺，1=按歌手，2=按专辑 */
     private int musicView = 0;
     /** 已展开的歌手/专辑桶名；换页签或换服务器时清空 */
     private final Set<String> openedBuckets = new HashSet<>();
     private final Map<String, Video.Meta> metaCache = new HashMap<>();
     private final Map<String, ImageIcon> posterCache = new HashMap<>();
+    /** 相册缩略图缓存，键是 "t:" + 路径。原图不进这里（一张 10MB 会把堆吃穿）。 */
+    private final Map<String, ImageIcon> photoCache = new HashMap<>();
 
     private javax.swing.Timer rebuildTimer;
 
@@ -130,9 +143,17 @@ final class LibraryPanel extends JPanel {
         spb.setBorder(BorderFactory.createEmptyBorder());
         bookHost.add(spb, BorderLayout.CENTER);
 
+        photoContent.setLayout(new BoxLayout(photoContent, BoxLayout.Y_AXIS));
+        photoContent.setBackground(Theme.BG_DEEP);
+        JScrollPane spp = new JScrollPane(photoContent);
+        spp.getVerticalScrollBar().setUnitIncrement(24);
+        spp.setBorder(BorderFactory.createEmptyBorder());
+        photoHost.add(spp, BorderLayout.CENTER);
+
         tabs.addTab("影视", videoHost);
         tabs.addTab("音乐", musicHost);
         tabs.addTab("图书", bookHost);
+        tabs.addTab("相册", photoHost);
         tabs.addChangeListener(e -> rebuild());
 
         hint.setForeground(Theme.FG_DIM);
@@ -143,7 +164,7 @@ final class LibraryPanel extends JPanel {
         add(tabs, BorderLayout.CENTER);
         add(hint, BorderLayout.SOUTH);
 
-        content.add(msg("选中左侧服务器后，这里会显示它的音乐、影视与图书。"));
+        content.add(msg("选中左侧服务器后，这里会显示它的影视、音乐、图书与相册。"));
     }
 
     /**
@@ -203,12 +224,13 @@ final class LibraryPanel extends JPanel {
         boolean same = base != null && base.equals(this.baseUrl) && eq(sid, this.cookie);
         this.baseUrl = base == null ? "" : base;
         this.cookie = sid;
-        if (same && (vlib != null || mlib != null || blib != null)) return;
+        if (same && (vlib != null || mlib != null || blib != null || plib != null)) return;
         metaCache.clear();
         posterCache.clear();
         vlib = null;
         mlib = null;
         blib = null;
+        plib = null;
         rebuild();
         reload();
     }
@@ -225,18 +247,21 @@ final class LibraryPanel extends JPanel {
             VideoLib.Lib vl = VideoLib.fetch(base, ck, null, 30000);
             Music.Lib ml = Music.fetch(base, ck, 30000);
             BookLib.Lib bl = BookLib.fetch(base, ck, null, 30000);
+            PhotoLib.Lib pl = PhotoLib.fetch(base, ck, null, 30000);
             SwingUtilities.invokeLater(() -> {
                 vlib = vl;
                 mlib = ml;
                 blib = bl;
+                plib = pl;
                 rebuild();
                 String e1 = vl.ok ? "" : ("影视库 " + vl.error);
                 String e2 = ml.ok ? "" : ("曲库 " + ml.error);
                 String e3 = bl.ok ? "" : ("书库 " + bl.error);
-                String err = (e1 + "  " + e2 + "  " + e3).trim();
+                String e4 = pl.ok ? "" : ("相册 " + pl.error);
+                String err = (e1 + "  " + e2 + "  " + e3 + "  " + e4).trim();
                 hint.setText(err.isEmpty()
                         ? "影视 " + vl.videos.size() + " 部 · 音乐 " + ml.tracks.size()
-                          + " 首 · 图书 " + bl.books.size() + " 本"
+                          + " 首 · 图书 " + bl.books.size() + " 本 · 相册 " + pl.photos.size() + " 张"
                         : err);
             });
         }, "usbnas-lib");
@@ -258,7 +283,7 @@ final class LibraryPanel extends JPanel {
     private void rebuild() {
         content.removeAll();
         int idx = tabs.getSelectedIndex();
-        // 三个页签各用一份独立宿主面板，切页时只搬内容，不重建滚动条位置
+        // 四个页签各用一份独立宿主面板，切页时只搬内容，不重建滚动条位置
         if (idx == 1) {
             musicContent.removeAll();
             buildMusic();
@@ -269,6 +294,11 @@ final class LibraryPanel extends JPanel {
             buildBooks();
             bookContent.revalidate();
             bookContent.repaint();
+        } else if (idx == 3) {
+            photoContent.removeAll();
+            buildPhotos();
+            photoContent.revalidate();
+            photoContent.repaint();
         } else {
             buildVideos();
             content.revalidate();
@@ -899,6 +929,226 @@ final class LibraryPanel extends JPanel {
         }
     }
 
+    // ------------------------------------------------------------------ 相册
+
+    /**
+     * 相册页：按目录分成若干「卷」，每卷里是一格一格的方形缩略图。
+     *
+     * 缩略图走服务端 {@code /_photos/thumb?f=&w=}，不要直接拉原图 —— 手机拍的
+     * 照片动辄 10MB/4000×3000，一屏 20 张就是 200MB 流量加 20×48MB 的 ARGB 解码，
+     * 桌面端这边会直接卡住几十秒。服务端用 inSampleSize 解到 320px 再压 JPEG80，
+     * 单张约 30KB。
+     */
+    private void buildPhotos() {
+        if (plib == null) {
+            photoContent.add(msg("正在拉取相册…"));
+            return;
+        }
+        if (!plib.ok) {
+            photoContent.add(msg("相册拉取失败：" + plib.error));
+            return;
+        }
+        if (plib.notConfigured()) {
+            photoContent.add(msg("服务端还没设相册目录。用管理员账号在网页端 /_admin 里指一个目录就会出来。"));
+            return;
+        }
+        String k = q();
+        Map<String, List<Photo>> byDir = new LinkedHashMap<>();
+        for (Photo p : plib.photos) {
+            String dir = p.dir == null ? "" : p.dir;
+            if (!k.isEmpty()) {
+                String hay = (p.name == null ? "" : p.name) + " " + dir;
+                if (!hay.toLowerCase().contains(k.toLowerCase())) continue;
+            }
+            byDir.computeIfAbsent(dir, x -> new ArrayList<>()).add(p);
+        }
+        if (byDir.isEmpty()) {
+            photoContent.add(msg(k.isEmpty() ? "相册里还没有照片" : "没有匹配「" + k + "」的照片"));
+            return;
+        }
+        for (Map.Entry<String, List<Photo>> en : byDir.entrySet()) {
+            List<Photo> list = en.getValue();
+            JPanel head = new JPanel(new BorderLayout());
+            head.setOpaque(true);
+            head.setBackground(Theme.BG_HOVER);
+            head.setBorder(new EmptyBorder(8, 12, 8, 12));
+            JLabel hl = new JLabel(folderName(en.getKey()));
+            hl.setFont(Theme.bold(13));
+            hl.setForeground(Theme.FG_TITLE);
+            head.add(hl, BorderLayout.WEST);
+            JLabel hr = new JLabel(list.size() + " 张");
+            hr.setFont(Theme.ui(11));
+            hr.setForeground(Theme.FG_MUTE);
+            head.add(hr, BorderLayout.EAST);
+            head.setAlignmentX(LEFT_ALIGNMENT);
+            head.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+            photoContent.add(head);
+
+            JPanel grid = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
+            grid.setOpaque(true);
+            grid.setBackground(Theme.BG_DEEP);
+            grid.setAlignmentX(LEFT_ALIGNMENT);
+            for (Photo p : list) grid.add(photoCell(p));
+            // FlowLayout 只会按自己被分配的宽度折行，而 BoxLayout(Y) 会给子组件
+            // 一个「多宽都行」的最大宽度 —— 于是 12 张就排成一条 1872px 的长龙，
+            // 超出窗口的部分直接被裁掉。这里自己算列数并把尺寸钉死，
+            // 折行结果才和外面预留的高度对得上。
+            int cell = 148 + 8;
+            int cols = Math.max(1, (photoGridWidth() + 8) / cell);
+            int rows = (list.size() + cols - 1) / cols;
+            int gridH = rows * cell + 8;
+            grid.setPreferredSize(new Dimension(Math.min(cols, list.size()) * cell + 8, gridH));
+            JPanel wrap = new JPanel(new BorderLayout());
+            wrap.setOpaque(false);
+            wrap.add(grid, BorderLayout.WEST);
+            wrap.setAlignmentX(LEFT_ALIGNMENT);
+            wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, gridH));
+            photoContent.add(wrap);
+            photoContent.add(Box.createVerticalStrut(8));
+        }
+    }
+
+    /**
+     * 相册网格能用的宽度。窗口还没显示出来时 viewport 宽是 0，
+     * 退回到一个保守值（4 列），总比排成一条长龙强。
+     */
+    private int photoGridWidth() {
+        int w = photoHost.getWidth();
+        if (w <= 0 && photoHost.getComponentCount() > 0
+                && photoHost.getComponent(0) instanceof JScrollPane) {
+            w = ((JScrollPane) photoHost.getComponent(0)).getViewport().getWidth();
+        }
+        if (w <= 0) w = 4 * 156;
+        return Math.max(156, w - 24);
+    }
+
+    /**
+     * 一格缩略图。尺寸固定 148×148（贴方形），文件名单独一行 —— 照片名是
+     * IMG_20251026_223556.jpg 这种，撑不开也认不出，所以只在悬停提示里给全名。
+     */
+    private JComponent photoCell(Photo p) {
+        JLabel cell = new JLabel();
+        cell.setPreferredSize(new Dimension(148, 148));
+        cell.setOpaque(true);
+        cell.setBackground(Theme.BG_CARD);
+        cell.setBorder(new LineBorder(Theme.LINE));
+        cell.setHorizontalAlignment(SwingConstants.CENTER);
+        cell.setVerticalAlignment(SwingConstants.CENTER);
+        cell.setForeground(Theme.FG_MUTE);
+        cell.setText("…");
+        cell.setToolTipText(p.name + (p.hasSize() ? "    " + p.width + "×" + p.height : ""));
+        cell.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+
+        String key = "t:" + p.path;
+        ImageIcon hit;
+        synchronized (photoCache) {
+            hit = photoCache.get(key);
+        }
+        if (hit != null) {
+            cell.setText(null);
+            cell.setIcon(hit);
+        } else {
+            final String base = baseUrl, ck = cookie;
+            Thread t = new Thread(() -> {
+                ImageIcon ic = fetchSquare(PhotoLib.thumbUrl(base, p.path, 320), ck, 148);
+                SwingUtilities.invokeLater(() -> {
+                    if (ic == null) {
+                        cell.setText("图裂了");
+                        return;
+                    }
+                    synchronized (photoCache) {
+                        photoCache.put(key, ic);
+                    }
+                    cell.setText(null);
+                    cell.setIcon(ic);
+                });
+            }, "usbnas-photo");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        cell.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                showPhoto(p);
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                cell.setBackground(Theme.BG_SEL);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                cell.setBackground(Theme.BG_CARD);
+            }
+        });
+        return cell;
+    }
+
+    /**
+     * 点开一张照片：无边框弹窗 + 纯深色底，图按窗口比例缩放到能放下为止。
+     * 这里才拉原图（{@code /_photos/image} 那条路径），而且只在用户真的要看的
+     * 时候拉一次，看完就随窗口一起丢掉，不进 {@link #photoCache}。
+     */
+    private void showPhoto(Photo p) {
+        final JDialog dlg = new JDialog(SwingUtilities.getWindowAncestor(this), Dialog.ModalityType.APPLICATION_MODAL);
+        dlg.setUndecorated(true);
+        JPanel root = new JPanel(new BorderLayout());
+        root.setBackground(Theme.BG_DEEP);
+        root.setBorder(new LineBorder(Theme.LINE));
+
+        JLabel img = new JLabel("正在取原图…", SwingConstants.CENTER);
+        img.setFont(Theme.ui(13));
+        img.setForeground(Theme.FG_DIM);
+        img.setPreferredSize(new Dimension(900, 620));
+        root.add(img, BorderLayout.CENTER);
+
+        JLabel cap = new JLabel("  " + p.name + "    "
+                + (p.hasSize() ? p.width + "×" + p.height + "    " : "")
+                + Music.humanSize(p.size) + "    点任意处关闭");
+        cap.setFont(Theme.ui(11));
+        cap.setForeground(Theme.FG_SUB);
+        cap.setBorder(new EmptyBorder(6, 8, 8, 8));
+        root.add(cap, BorderLayout.SOUTH);
+
+        final String base = baseUrl, ck = cookie;
+        final int vw = 900, vh = 620;
+        Thread t = new Thread(() -> {
+            BufferedImage bi = fetchRaw(PhotoLib.imageUrl(base, p.path), ck);
+            SwingUtilities.invokeLater(() -> {
+                if (bi == null) {
+                    img.setText("原图取不到（可能已删除，或者登录已过期）");
+                    img.setForeground(Theme.ERR);
+                } else {
+                    img.setText(null);
+                    img.setIcon(new ImageIcon(fit(bi, vw, vh)));
+                }
+                dlg.pack();
+                dlg.setLocationRelativeTo(LibraryPanel.this);
+            });
+        }, "usbnas-photo-full");
+        t.setDaemon(true);
+        t.start();
+
+        MouseAdapter close = new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                dlg.dispose();
+            }
+        };
+        root.addMouseListener(close);
+        img.addMouseListener(close);
+        cap.addMouseListener(close);
+        dlg.getRootPane().registerKeyboardAction(e -> dlg.dispose(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        dlg.setContentPane(root);
+        dlg.pack();
+        dlg.setLocationRelativeTo(this);
+        dlg.setVisible(true);
+    }
+
     private JComponent msg(String text) {
         JLabel l = new JLabel("<html><div style='width:560px;color:" + Theme.hex(Theme.FG_SUB) + ";font-size:13px'>"
                 + escapeInline(text) + "</div></html>");
@@ -963,6 +1213,77 @@ final class LibraryPanel extends JPanel {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
                 RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.drawImage(src, 0, 0, w, h, cx, cy, cx + cw, cy + ch, null);
+        g.dispose();
+        return out;
+    }
+
+    /**
+     * 相册缩略图：服务端已经按 w 参数解好、压成 JPEG 了，这里只需要拉回来缩到
+     * {@code side×side} 的方格里。和 {@link #fetchImage} 分开是因为海报要 2:3 裁剪，
+     * 照片裁成 2:3 会切掉两边，看着不像照片。
+     */
+    private static ImageIcon fetchSquare(String url, String cookie, int side) {
+        BufferedImage bi = fetchRaw(url, cookie, 8000);
+        if (bi == null) return null;
+        return new ImageIcon(square(bi, side));
+    }
+
+    /** 拉一张原图/原尺寸图，不做任何缩放。用于相册全屏查看。 */
+    private static BufferedImage fetchRaw(String url, String cookie) {
+        return fetchRaw(url, cookie, 20000);
+    }
+
+    private static BufferedImage fetchRaw(String url, String cookie, int readTimeout) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(readTimeout);
+            c.setRequestProperty("User-Agent", "USBNASLink/1.0");
+            if (cookie != null && !cookie.isEmpty()) {
+                c.setRequestProperty("Cookie", Session.COOKIE + "=" + cookie);
+            }
+            if (c.getResponseCode() != 200) return null;
+            InputStream in = c.getInputStream();
+            BufferedImage bi = ImageIO.read(in);
+            in.close();
+            return bi;
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /** 居中裁成正方形再缩放，缩略图网格才对得齐。 */
+    private static BufferedImage square(BufferedImage src, int side) {
+        int sw = src.getWidth(), sh = src.getHeight();
+        if (sw <= 0 || sh <= 0) return src;
+        int s = Math.min(sw, sh);
+        int cx = (sw - s) / 2, cy = (sh - s) / 2;
+        BufferedImage out = new BufferedImage(side, side, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = out.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.drawImage(src, 0, 0, side, side, cx, cy, cx + s, cy + s, null);
+        g.dispose();
+        return out;
+    }
+
+    /** 等比缩到能塞进 maxW×maxH，不放大。 */
+    private static BufferedImage fit(BufferedImage src, int maxW, int maxH) {
+        int sw = src.getWidth(), sh = src.getHeight();
+        if (sw <= 0 || sh <= 0) return src;
+        double k = Math.min(1.0, Math.min((double) maxW / sw, (double) maxH / sh));
+        int w = Math.max(1, (int) Math.round(sw * k));
+        int h = Math.max(1, (int) Math.round(sh * k));
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = out.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.drawImage(src, 0, 0, w, h, null);
         g.dispose();
         return out;
     }

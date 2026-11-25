@@ -31,6 +31,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         const val EXTRA_SIZES = "sizes"
         const val EXTRA_DIRS = "dirs"
         const val EXTRA_COVERS = "covers"
+        const val EXTRA_EMBEDS = "embeds"
         const val EXTRA_START = "start"
     }
 
@@ -107,14 +108,22 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         val sizes = intent.getLongArrayExtra(EXTRA_SIZES) ?: LongArray(files.size)
         val dirs = intent.getStringArrayExtra(EXTRA_DIRS) ?: Array(files.size) { "" }
         val covers = intent.getStringArrayExtra(EXTRA_COVERS) ?: Array(files.size) { "" }
+        // 内嵌封面标记单独一个数组：Track 构造器收起不了这么多字段，
+        // 而且 embedded 是 boolean，和 covers（图路径）混在一个 String[] 里
+        // 只能靠 "1"/"" 编码，还不如明说。列表页（LibraryActivity.openPlayer）
+        // 传的是 album.map { if (it.embedded) "1" else "" }。
+        val embeds = intent.getStringArrayExtra(EXTRA_EMBEDS) ?: Array(files.size) { "" }
         val start = intent.getIntExtra(EXTRA_START, 0)
 
         val tracks = ArrayList<Track>(files.size)
         for (i in files.indices) {
             val t = Track(files[i], names[i], titles[i], dirs[i], sizes[i], 0L)
-            // 构造器没有 lrc/cover 参数，这两个要单独挂：Player.loadLyric 只看 hasLyrics()
+            // 构造器没有 lrc/cover 参数，这三个要单独挂：Player.loadLyric 只看 hasLyrics()
             if (lrcs[i].isNotEmpty()) t.lrcName = lrcs[i]
             if (i < covers.size && covers[i].isNotEmpty()) t.cover = covers[i]
+            // 少了这一行，服务端报的 473 首 i:1 到这里全变成 embedded=false，
+            // loadCover 里 hasCover() 判空直接 return，内嵌封面一张都画不出来。
+            if (i < embeds.size && embeds[i].isNotEmpty()) t.embedded = embeds[i] != "0"
             tracks.add(t)
         }
 
@@ -491,17 +500,18 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
      * 扫描图不该把播放页带走，失败就保持自绘贴纸。
      */
     private fun loadCover(track: Track) {
-        val key = if (track.hasCover()) track.cover else null
         coverFor = track.path
-        if (key == null) {
+        // 判断依据必须是 coverUrl 而不是 track.cover：内嵌封面（ID3 APIC /
+        // FLAC PICTURE）走的是 /cover?f=<音频路径>，track.cover 此时是 null。
+        // 之前写成 `val key = if (track.hasCover()) track.cover else null`，
+        // 于是「只有内嵌封面、目录里没有 folder.jpg」的歌全部落进 key == null
+        // 分支，直接画贴纸 —— 服务端报了 473 首 i:1，客户端一张都没显示。
+        val url = track.coverUrl(baseUrl)
+        if (!track.hasCover() || url.isNullOrEmpty()) {
             disc.setCover(null, "none:${track.path}")
             return
         }
-        val url = track.coverUrl(baseUrl) ?: run {
-            disc.setCover(null, "none:${track.path}")
-            return
-        }
-        android.util.Log.i("USBNASLink", "cover get ${track.cover} -> $url")
+        android.util.Log.i("USBNASLink", "cover get ${track.cover ?: "embedded"} -> $url")
         Thread {
             var bmp: android.graphics.Bitmap? = null
             try {
@@ -525,10 +535,10 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                 if (coverFor != track.path) return@runOnUiThread
                 if (got == null) {
                     disc.setCover(null, "fail:${track.path}")
-                    android.util.Log.i("USBNASLink", "cover miss ${track.cover}")
+                    android.util.Log.i("USBNASLink", "cover miss ${track.cover ?: "embedded"}")
                 } else {
                     disc.setCover(got, track.path)
-                    android.util.Log.i("USBNASLink", "cover ok ${got.width}x${got.height} ${track.cover}")
+                    android.util.Log.i("USBNASLink", "cover ok ${got.width}x${got.height} ${track.cover ?: "embedded"}")
                 }
             }
         }.start()

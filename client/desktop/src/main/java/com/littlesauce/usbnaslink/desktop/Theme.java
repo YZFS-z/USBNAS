@@ -254,6 +254,11 @@ final class Theme {
         return FlatButtonUI.ghost(text);
     }
 
+    /** 实体控件按钮：卡片实底 + 亮描边 + 主文字色，播放器那排键用它 */
+    static JButton control(String text) {
+        return FlatButtonUI.control(text);
+    }
+
     static JTextField field(int cols) {
         JTextField f = new JTextField(cols);
         styleInput(f);

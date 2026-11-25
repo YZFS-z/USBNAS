@@ -179,7 +179,23 @@ class Player(private val ctx: Context) {
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                     .build()
             )
-            p.setDataSource(url)
+            // 有账号时服务端要 sid。MediaPlayer 带请求头只有 (Context, Uri, Map)
+            // 这一个口子，而它的 Map 是**原始 HTTP 头**：键必须是 `Cookie`，
+            // 值才是 `usbnas_sid=xxx` 整串。
+            //
+            // 之前把键写成 Session.COOKIE（"usbnas_sid"）是错的：框架只认
+            // `Cookie` 这个头名，其余键原样发出去也没人读，服务端按匿名处理
+            // 回 401，native 层就报 `NuCachedSource2: source returned error -1`
+            // 然后每 3 秒重试一次，界面停在 0:00 不动。
+            // logcat 里 `MediaHTTPService(...): Cookies: null` 就是框架在打印
+            // 它从 headers 取到的 `Cookie` 值 —— 打 null 说明键名没对上。
+            val s = sid
+            val hdrs = if (s.isNullOrEmpty()) null else mapOf("Cookie" to Session.cookieHeader(s))
+            if (hdrs != null) {
+                p.setDataSource(ctx, android.net.Uri.parse(url), hdrs)
+            } else {
+                p.setDataSource(url)
+            }
             p.setOnPreparedListener {
                 it.start()
                 listener?.onState(true)

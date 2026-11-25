@@ -165,7 +165,12 @@ public final class Lyrics {
             c.setReadTimeout(timeoutMs);
             c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8");
             c.setRequestProperty("User-Agent", "USBNASLink/1.0");
-            if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
+            // Cookie 头要的是 `usbnas_sid=<token>` 整串，传进来的却是裸 sid。
+            // 直接塞裸值服务端读不到这个 cookie 名，就当匿名 —— 表现为
+            // 「保存歌词失败：要登录」，而同一时刻列表/播放都好好的。
+            if (cookie != null && !cookie.isEmpty()) {
+                c.setRequestProperty("Cookie", Session.cookieHeader(cookie));
+            }
             c.setFixedLengthStreamingMode(data.length);
             OutputStream out = c.getOutputStream();
             out.write(data);

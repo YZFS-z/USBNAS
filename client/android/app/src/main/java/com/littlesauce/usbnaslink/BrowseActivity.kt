@@ -34,10 +34,33 @@ class BrowseActivity : AppCompatActivity() {
         const val EXTRA_URL = "url"
         const val EXTRA_NAME = "name"
 
+        /**
+         * 直接落在登录表单上，而不是先给用户看一遍首页再让他自己去点「登录」。
+         *
+         * 为什么要有这个开关：从「媒体库 → 登录过期提示条」点进来时，用户的诉求
+         * 只有一件事 —— 把密码敲进去。先加载首页意味着 WebView 还要跑一遍整个
+         * 文件列表、滚一遍缩略图，然后他得自己找到右上角那个「登录」；在手机上
+         * 首页那一坨东西加载完还要等好几秒，观感像「点了没反应」。
+         */
+        const val EXTRA_LOGIN = "login"
+
         fun intent(ctx: android.content.Context, baseUrl: String, name: String?): android.content.Intent {
             val i = android.content.Intent(ctx, BrowseActivity::class.java)
             i.putExtra(EXTRA_URL, baseUrl)
             i.putExtra(EXTRA_NAME, name)
+            return i
+        }
+
+        /**
+         * 同 [intent]，但首屏直接是登录表单。
+         *
+         * 所有「你还没登录 / 登录过期了」的入口都该走这个：用户点下去的目的是
+         * 交凭据，不是浏览文件。先给他首页，他得自己找右上角那个「登录」，
+         * 而在手机上首页要跑几秒才长得出来。
+         */
+        fun loginIntent(ctx: android.content.Context, baseUrl: String, name: String?): android.content.Intent {
+            val i = intent(ctx, baseUrl, name)
+            i.putExtra(EXTRA_LOGIN, true)
             return i
         }
     }
@@ -154,8 +177,23 @@ class BrowseActivity : AppCompatActivity() {
         // 两种地址都带上 `?theme=`：WebView 里跑的就是服务端那套页面，它自己的
         // localStorage 是空的，不带主题就会以服务端的 dark 起手 —— 如果 App 此时
         // 是日间，用户一进「网页」页签就会看到一块黑色的页面，像另一个 App。
-        val startUrl = handoffUrl() ?: themeUrl(baseUrl)
+        val startUrl = when {
+            // 「登录过期」点进来的：用户唯一想干的事就是把密码敲进去，直接落到
+            // 表单上。别先加载首页让他自己找右上角的「登录」—— 手机上首页那一坨
+            // 文件列表要跑好几秒才长得出来，观感像「点了没反应」。
+            intent.getBooleanExtra(EXTRA_LOGIN, false) -> loginUrl()
+            else -> handoffUrl() ?: themeUrl(baseUrl)
+        }
         web.loadUrl(startUrl)
+    }
+
+    /** 登录表单的地址：`back` 由服务端拼进隐藏域，主题照旧拼在 query 上。 */
+    private fun loginUrl(): String {
+        // back 必须以 '/' 开头，否则服务端会按「不是站内路径」丢掉它，
+        // 登录完跳回裸首页、把主题参数也一起丢了。
+        val back = "/" + themeQuery()
+        val mode = if (Palette.mode == Palette.MODE_DAY) ThemeLib.LIGHT else ThemeLib.DARK
+        return "$baseUrl/_login?back=" + java.net.URLEncoder.encode(back, "UTF-8") + "&theme=" + mode
     }
 
     /**

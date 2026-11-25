@@ -30,6 +30,21 @@ public final class AppPrefs {
     /** 上次检查更新的 wall clock 毫秒 */
     private static final String KEY_LAST_UPDATE_CHECK = "last_update_check";
     private static final String KEY_THEME = "theme";
+    /**
+     * 登录会话的落盘快照。
+     *
+     * 为什么必须落盘：会话表原来只活在 HttpServer 的内存里，服务端进程一重启
+     * （改设置触发、App 被 MIUI 杀、手机重启）所有 sid 立刻作废，而客户端
+     * SharedPreferences 里还存着那个死掉的 sid —— 于是影视/音乐/相册全部 401，
+     * 用户看到的是「影片放不了」「一直在跳歌」，而不是「登录过期了」。
+     * 存到 SharedPreferences 之后，重新起来还能认原来的 sid。
+     *
+     * 存的是纯文本，一行一条：token \t 用户名 \t 过期时刻(wall clock 毫秒)。
+     * 这里存的是 bearer 凭据，和 sid 本身同等敏感；它落在 App 私有目录
+     * （/data/data/com.littlesauce.usbnas/shared_prefs），和非 root 设备上
+     * Cookie 的暴露面一致。
+     */
+    private static final String KEY_SESSIONS = "sessions";
 
     /** 标题最大长度，太长会把首页顶栏和网页 header 挤坏 */
     public static final int TITLE_MAX = 24;
@@ -358,5 +373,65 @@ public final class AppPrefs {
         if (THEME_LIGHT.equals(s)) return "日间";
         if (THEME_INK.equals(s)) return "水墨";
         return "夜间";
+    }
+
+    // ==================== 登录会话的落盘 ====================
+    //
+    // 见 KEY_SESSIONS 的注释。两个方法都很土：读一整行、按 tab 切三段。
+    // 用 json 或序列化不是不行，但这里只有「token/用户名/过期时刻」三个字段，
+    // 引一个解析器反而多出一堆可能出错的路径 —— 存坏了就整行丢掉重新登录即可。
+
+    /**
+     * 读出上次落盘的会话，形如 {@code token -> [用户名, 过期时刻]}。
+     *
+     * 过期的条目在这里就丢掉，不往上传；读不出来（文件被改坏、格式变了）
+     * 一律当空表处理，宁可让用户重登一次，也不要拿半个解析结果去建会话。
+     */
+    public static java.util.Map<String, Object[]> loadSessions(Context c) {
+        java.util.Map<String, Object[]> out = new java.util.LinkedHashMap<>();
+        String raw;
+        try {
+            raw = sp(c).getString(KEY_SESSIONS, "");
+        } catch (Throwable t) {
+            return out;
+        }
+        if (raw == null || raw.isEmpty()) return out;
+        long now = System.currentTimeMillis();
+        for (String line : raw.split("\n")) {
+            if (line == null || line.isEmpty()) continue;
+            String[] f = line.split("\t");
+            if (f.length < 3) continue;
+            String tok = f[0];
+            String user = f[1];
+            if (tok.isEmpty() || user.isEmpty()) continue;
+            long exp;
+            try {
+                exp = Long.parseLong(f[2].trim());
+            } catch (Throwable t) {
+                continue;
+            }
+            if (exp <= now) continue;   // 已经过期，不用留着占地方
+            out.put(tok, new Object[]{user, exp});
+        }
+        return out;
+    }
+
+    /**
+     * 把当前会话表写回去。
+     *
+     * @param entries 形如 {@code token -> [用户名, 过期时刻(wall clock 毫秒)]}
+     */
+    public static void saveSessions(Context c, java.util.Map<String, Object[]> entries) {
+        StringBuilder sb = new StringBuilder();
+        if (entries != null) {
+            for (java.util.Map.Entry<String, Object[]> e : entries.entrySet()) {
+                Object[] v = e.getValue();
+                if (v == null || v.length < 2) continue;
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(e.getKey()).append('\t').append(String.valueOf(v[0]))
+                        .append('\t').append(String.valueOf(v[1]));
+            }
+        }
+        sp(c).edit().putString(KEY_SESSIONS, sb.toString()).apply();
     }
 }

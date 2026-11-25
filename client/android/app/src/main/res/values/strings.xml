@@ -109,6 +109,17 @@
 
     <!-- 媒体库各页面的空状态与分组标题 -->
     <string name="lib_all_failed">三个库都没取到：%1$s</string>
+    <!-- 服务端重启/改密码之后 session 全失效，客户端还拿着旧 sid：
+         以前这里只会笼统地显示「还没有影视」，用户以为是文件没了。 -->
+    <string name="lib_need_login">登录已过期（服务端重启过或改过密码），现在只能看到空书架。去网页端重新登录一次，回来就正常了。</string>
+    <string name="lib_need_login_go">去登录</string>
+    <string name="lib_need_login_retry">已经登好了，刷新试试</string>
+    <!-- 常驻提示条：清单能列出来但取不了文件，用户点一下就去登录 -->
+    <string name="lib_auth_lost_bar">登录已过期：列表还能看，但播放、看大图、读正文都会失败。点这里去网页端重新登录。</string>
+    <!-- 视频页：401 和「解不了这个编码」是两个完全不同的毛病，不能混成一句话 -->
+    <string name="video_need_login">登录已过期，服务端拒绝了这次请求（不是影片坏了）。回媒体库重新登录后再点一次。</string>
+    <!-- 404 单独说：文件被删/盘没挂上，和编码无关，别让用户去折腾播放器 -->
+    <string name="video_gone">服务端找不到这个文件了（可能被删了，或者 U 盘没挂上）。</string>
     <string name="lib_empty_video">还没有影视。管理员在网页端「影视目录」里指一个目录就会出来。</string>
     <string name="lib_group_videos">%1$d 部</string>
     <string name="lib_group_other">其他</string>
@@ -259,6 +270,7 @@
     <string name="video_start_fail">起播失败：%1$s</string>
     <string name="video_embedded">%1$d×%2$d    ·    内嵌播放</string>
     <string name="video_decode_fail">解码失败（what=%1$d extra=%2$d）</string>
+    <string name="video_play_aborted">播放中断了：读不到数据流。检查一下手机和服务端是不是还连着，或者回列表重进一次。</string>
     <string name="video_ended">播放结束</string>
     <string name="video_no_decoder_hint">这个格式系统解码器放不了，试试「用其它播放器」</string>
     <string name="video_no_player">没有能播放这个格式的播放器</string>

@@ -170,23 +170,32 @@ final class VlcEngine {
         onFinished = r == null ? null : (v) -> r.run();
     }
 
-    /** 播一个网络地址（http://… 也行）；headers 里可带 Referer/User-Agent */
+    /**
+     * 播一个网络地址（http://… 也行）。
+     *
+     * <p>认证走 URL userinfo（HTTP Basic）：libvlc 3.0 的 http 插件只认
+     * {@code http-user-agent / http-referrer / http-proxy* } 这几项，
+     * <b>没有</b> {@code :http-cookie}，也没有任何注入 {@code Authorization} 头的入口
+     * （拆 libhttp_plugin.dll 数过字符串确认）。以前传的 {@code :http-cookie=…}
+     * 是个看不见的哑参数 —— 于是所有「要登录才能播」的歌都静默 401，
+     * 表现为 play() 返回 true 但时间永远 00:00。
+     *
+     * @param url  裸地址；这里会按主机补上 {@code user:pass@}
+     * @param cookie 旧的 sid 通道，保留参数只为兼容调用方；不再使用
+     */
     boolean play(String url, String cookie) {
         try {
             if (player == null) return false;
             timeMs = 0;
             lengthMs = 0;
             active = true;
-            String[] opts = new String[]{"--no-video-title-show"};
-            if (cookie != null && !cookie.isEmpty()) {
-                // libvlc 的 http 访问插件认这句话里的 Cookie
-                opts = new String[]{
-                        "--no-video-title-show",
-                        ":http-referrer=",
-                        ":http-user-agent=USBNASLink/1.0",
-                };
-            }
-            boolean started = player.media().play(url, opts);
+            String real = com.littlesauce.usbnaslink.desktop.Creds.inject(url);
+            String[] opts = new String[]{
+                    "--no-video-title-show",
+                    ":http-referrer=",
+                    ":http-user-agent=USBNASLink/1.0",
+            };
+            boolean started = player.media().play(real, opts);
             return started;
         } catch (Throwable t) {
             lastError = String.valueOf(t);

@@ -313,16 +313,23 @@ public final class Main {
 
             @Override
             public void onPlayMusic(java.util.List<Track> album, Track t) {
-                ensurePlayer().setPlaylist(album, t);
-                player.setVisible(true);
-                player.toFront();
+                // 点了就出声：以前只塞播放列表 + setVisible，窗口弹出来还是静静的，
+                // 用户得自己再点一次「播放」才算开始 —— 这跟手机端点一首歌就唱的
+                // 直觉相反，也是「点了没反应」投诉的来源。
+                PlayerWindow p = ensurePlayer();
+                p.setPlaylist(album, t);
+                p.setVisible(true);
+                p.toFront();
+                p.playFirst();
             }
 
             @Override
             public void onOpenBook(Book b) {
-                // 内嵌阅读：服务端 /_books/text 先把 docx/doc/epub/txt 抽成纯文本，
-                // 由 BookReader 自己排版，不跳浏览器。只有 PDF 例外——客户端没有
-                // PDF 渲染器，BookReader 里会给「用浏览器打开」的按钮。
+                // 内嵌阅读，全程不跳浏览器：
+                //   · docx/doc/epub/txt 由服务端 /_books/text 抽成纯文本，BookReader 自己排版；
+                //   · pdf 由服务端 /_books/pdf 用 PdfRenderer 渲成 JPEG 页，客户端当图片翻。
+                // 只有服务端还是旧版本（没有 /_books/pdf）时，PDF 那页才会给一个
+                // 「用浏览器打开」的按钮兜底。
                 if (bookReader == null) {
                     bookReader = new BookReader();
                 }
@@ -727,11 +734,16 @@ public final class Main {
         u.setText(System.getProperty("user.name", ""));
         JPasswordField pw = Theme.password(16);
         JCheckBox remember = Theme.check("记住该设备（服务端会话保留一年）", false);
+        // 桌面端和手机端不一样：libvlc 3.0 的 http 插件不支持自定义请求头，
+        // 想让播放器带上认证，只能把账号密码拼进 URL 走 HTTP Basic。
+        // 所以这里必须把密码留在进程里，否则连「放一首需要登录的歌」都做不了。
+        JCheckBox savePass = Theme.check("在本机记住密码（播放器要用它取流）", true);
         p.add(Theme.label("用户名"));
         p.add(u);
         p.add(Theme.label("密码"));
         p.add(pw);
         p.add(remember);
+        p.add(savePass);
         p.add(Theme.caption("登录后点「在浏览器打开」会用一张一次性票自动登录浏览器。"));
         if (!Theme.confirm(frame, "登录 " + s.info.hostPort(), null, p, "登录", "取消", false)) return;
 
@@ -740,6 +752,7 @@ public final class Main {
         final String user = u.getText().trim();
         final String pass = new String(pw.getPassword());
         final boolean keep = remember.isSelected();
+        final boolean persist = savePass.isSelected();
         Thread t = new Thread(() -> {
             Session sess = new Session(s.info.baseUrl);
             String err = sess.login(user, pass, keep);
@@ -753,6 +766,8 @@ public final class Main {
                             + " sid=" + (sess.sid().length() > 8 ? sess.sid().substring(0, 8) + "…" : sess.sid()));
                     previewSvc = s;
                     connSid = sess.sid();
+                    // 凭据留在进程里：PlayerWindow / VideoWindow 拼 libvlc 的 URL 时要用。
+                    Creds.remember(s.info.baseUrl, user, pass, persist);
                     connectMedia(s.info.baseUrl);
                     onSelect();
                 } else {

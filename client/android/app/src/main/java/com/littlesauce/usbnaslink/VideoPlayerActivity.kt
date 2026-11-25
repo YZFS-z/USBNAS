@@ -75,11 +75,35 @@ class VideoPlayerActivity : Activity() {
     private var surfaceReady = false
     private var prepared = false
 
+    /**
+     * `onPrepared` 已经回调过。
+     *
+     * 必须和 [prepared] 分开：[prepared] 表示「已经发起过这次起播」（防重入），
+     * 它在 `prepareAsync()` 之前就置 true 了。而 `currentPosition` / `duration`
+     * 这些读数只能在 `onPrepared` 之后取 —— 提前取时 MediaPlayer 会直接把
+     * `error (-38, 0)` 抛给错误监听器，界面上就会出现「解码失败（what=-38）」，
+     * 而片子其实一点问题都没有。tick 是 400ms 一次，所以表现为每 400ms 刷一条。
+     */
+    private var ready = false
+
     private val ui = Handler(Looper.getMainLooper())
+
+    /**
+     * 探针用的后台线程。
+     *
+     * 只用它发一次 `Range: bytes=0-0` 的状态码探测，所以单线程足够，也不必复用
+     * 别处的池子 —— 播放器是独立 Activity，跟着它一起结束更省心。
+     */
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "usbnas-vprobe").apply { isDaemon = true }
+    }
     private val tick = object : Runnable {
         override fun run() {
             val p = mp
-            if (p != null && prepared && !dragging) {
+            // 只在 onPrepared 之后读读数：在那之前 duration/currentPosition 一碰就
+            // 触发 error(-38,0)，界面会误报「解码失败」。tick 是 400ms 一次，
+            // 不加这个门槛就是每 400ms 刷一条错误，看起来像片子坏了。
+            if (p != null && ready && !dragging) {
                 try {
                     val pos = p.currentPosition
                     val dur = p.duration
@@ -264,7 +288,61 @@ class VideoPlayerActivity : Activity() {
     private fun maybeStart() {
         if (!surfaceReady || prepared || url.isEmpty()) return
         prepared = true
+        // 起播前先问一次这个地址给不给（见 probeThenStart 的注释）：
+        // MediaPlayer 拿到 401 的登录页 HTML 只会报 what=1 extra=-1004，
+        // 那句话读起来像「这个影片的编码不支持」，用户会去删片。
+        probeThenStart()
+    }
+
+    /**
+     * 起播前探一次状态码，401 就直接说「登录过期」，别再进 MediaPlayer。
+     *
+     * 背景：服务端 `needLoginForFile()` 对音频/视频/图片/可预览格式一律要求登录，
+     * 而三个清单端点（/_videos 等）是匿名可读的 —— 于是 sid 失效时**列表照常列出来**，
+     * 点播才 401。用户的观感就是「原本能播的片子突然全播放不了」。
+     *
+     * 探针只发 `Range: bytes=0-0`，几十 GB 的片子也只回一个字节。
+     * 探不通（返回 0，网络问题）不拦，交给 MediaPlayer 照常试 ——
+     * 网络断了本来就该报网络错误，不该冒充登录问题。
+     */
+    private fun probeThenStart() {
+        val u = url
+        val ck = sid
+        io.execute {
+            val code = Session.statusOf(u, ck)
+            // 打印 sid 前缀而不是长度：新旧 sid 都是 36 字符，长度对不上无用，
+            // 前缀才能一眼看出「手里这个是不是网页端刚发的那个」。
+            val sidTag = ck?.take(8) ?: "null"
+            val body = Session.lastBody().take(120)
+            android.util.Log.i("USBNASLink", "probe code=$code sid=$sidTag body=$body url=$u")
+            ui.post {
+                // 这期间用户可能已经退出或换了片子
+                if (u != url) return@post
+                if (code == 401) {
+                    // 探到 401 就把 Prefs 里那份 sid 也对齐一次：网页端刚登录过的话，
+                    // 这里能直接救回来，用户不用真的跑一趟登录页。
+                    val fresh = Prefs(this@VideoPlayerActivity).sid
+                    if (fresh != null && fresh.isNotEmpty() && fresh != ck) {
+                        sid = fresh
+                        android.util.Log.i("USBNASLink", "probe retry with fresh sid=${fresh.take(8)}")
+                        probeThenStart()
+                        return@post
+                    }
+                    onPlayFailed(getString(R.string.video_need_login), hint = false)
+                    return@post
+                }
+                if (code == 404) {
+                    onPlayFailed(getString(R.string.video_gone), hint = false)
+                    return@post
+                }
+                startPlayer()
+            }
+        }
+    }
+
+    private fun startPlayer() {
         try {
+            ready = false
             val p = MediaPlayer()
             p.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -275,16 +353,27 @@ class VideoPlayerActivity : Activity() {
             if (st != null) {
                 p.setSurface(android.view.Surface(st))
             }
-            // 有账号时服务端要 sid：setDataSource(Context, Uri, headers) 是
-            // MediaPlayer 唯一能带请求头的口子，所以 Cookie 走这里而不是 URL 参数
+            // 有账号时服务端要 sid。MediaPlayer 带请求头只有 (Context, Uri, Map)
+            // 这一个口子，而它的 Map 是**原始 HTTP 头**：键必须是 `Cookie`，
+            // 值才是 `usbnas_sid=xxx` 整串。
+            //
+            // 之前把键写成 Session.COOKIE（"usbnas_sid"）是错的：框架只认
+            // `Cookie` 这个头名，其余键发出去也没人读，服务端按匿名处理回 401，
+            // native 层报 `NuCachedSource2: source returned error -1`，
+            // 每 3 秒重试一次，界面停在 00:00 不动。
+            // logcat 里 `MediaHTTPService(...): Cookies: null` 就是框架在打印
+            // 它从 headers 里取到的 `Cookie` 值 —— 打 null 说明键名没对上，
+            // 不是「CookieHandler 为空」那么无害。
             val s = sid
-            if (!s.isNullOrEmpty()) {
-                p.setDataSource(this, android.net.Uri.parse(url), mapOf(Session.COOKIE to s))
+            val hdrs = if (s.isNullOrEmpty()) null else mapOf("Cookie" to Session.cookieHeader(s))
+            if (hdrs != null) {
+                p.setDataSource(this, android.net.Uri.parse(url), hdrs)
             } else {
                 p.setDataSource(url)
             }
             p.setOnPreparedListener { it ->
                 spinner.visibility = View.GONE
+                ready = true
                 try {
                     it.start()
                 } catch (e: Throwable) {
@@ -293,9 +382,18 @@ class VideoPlayerActivity : Activity() {
                 }
                 subText.text = getString(R.string.video_embedded, it.videoWidth, it.videoHeight)
                 playBtn.text = getString(R.string.play_pause)
+                // 进度条从这一刻开始跟；tick 早就 post 上了，靠 ready 这个门槛拦住
+                // onPrepared 之前的那几帧（不然每 400ms 一条 error(-38,0)）。
             }
             p.setOnErrorListener { _, what, extra ->
-                onPlayFailed(getString(R.string.video_decode_fail, what, extra))
+                // -38 单列一条：它是「在错误状态上调了 getDuration 之类」的信号，
+                // 不是片源坏了。真实原因通常是网络断/被踢登录/服务端没起，说成
+                // 「解码失败」会把用户引到「删片重下」上去。
+                if (what == -38) {
+                    onPlayFailed(getString(R.string.video_play_aborted), hint = false)
+                } else {
+                    onPlayFailed(getString(R.string.video_decode_fail, what, extra))
+                }
                 true
             }
             p.setOnCompletionListener {
@@ -308,12 +406,20 @@ class VideoPlayerActivity : Activity() {
         }
     }
 
-    private fun onPlayFailed(msg: String) {
+    /**
+     * 播放失败。
+     *
+     * @param hint 是否顺手弹一句「可能是编码不支持」。401/404 这种确定原因的失败
+     *             不该弹 —— 那会让用户以为片子坏了，跑去删文件。
+     */
+    private fun onPlayFailed(msg: String, hint: Boolean = true) {
         spinner.visibility = View.GONE
         subText.text = msg
         subText.setTextColor(Color.parseColor("#FF8A94"))
         // 手机自带的 MediaPlayer 对 rmvb / 部分 hevc 封装无能为力，必须给条路
-        Toast.makeText(this, getString(R.string.video_no_decoder_hint), Toast.LENGTH_LONG).show()
+        if (hint) {
+            Toast.makeText(this, getString(R.string.video_no_decoder_hint), Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun togglePlay(b: Button) {

@@ -38,6 +38,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.pdf.PdfRenderer;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 
 /**
@@ -278,21 +282,81 @@ public class HttpServer {
 
     /** token → 用户名 */
     private final Map<String, String> sessions = new ConcurrentHashMap<>();
-    /** token → 过期时刻（elapsedRealtime） */
+    /**
+     * token → 过期时刻。
+     *
+     * 这里用 wall clock（{@link System#currentTimeMillis()}）而不是
+     * {@code SystemClock.elapsedRealtime()}：会话要落盘跨重启存活，
+     * 而 elapsedRealtime 在手机重启后归零 —— 存了也没法比较。
+     * 代价是手机改时间可能提前/延后过期，但一个一天有效的登录会话扛得住。
+     */
     private final Map<String, Long> sessionExp = new ConcurrentHashMap<>();
     private final SecureRandom rng = new SecureRandom();
+
+    /**
+     * 把当前会话表写回 SharedPreferences。
+     *
+     * 只在「会话增删」和「过期清理」时调用，不在每次请求里调 ——
+     * 一个 24 小时的会话最多几十条，写盘成本可以忽略，但没必要每个请求都写。
+     */
+    private void persistSessions() {
+        try {
+            android.content.Context ctx = appCtx();
+            if (ctx == null) return;
+            long now = System.currentTimeMillis();
+            Map<String, Object[]> out = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, String> e : sessions.entrySet()) {
+                Long exp = sessionExp.get(e.getKey());
+                if (exp == null || exp <= now) continue;
+                out.put(e.getKey(), new Object[]{e.getValue(), exp});
+            }
+            AppPrefs.saveSessions(ctx, out);
+        } catch (Throwable ignored) {
+            // 存不下不影响本次登录：内存里那份还在，只是重启后要重登
+        }
+    }
+
+    /**
+     * 启动时把落盘的会话读回来。
+     *
+     * 在构造函数里调（服务起来之前）。读到的 token 直接塞进两张表，
+     * 于是服务端重启、App 被系统杀掉重开、甚至手机重启之后，
+     * 客户端 SharedPreferences 里那个 sid 仍然有效 ——
+     * 用户不会遇到「昨天还能看片，今天全部 401 而且没有任何提示」。
+     */
+    private void restoreSessions() {
+        try {
+            android.content.Context ctx = appCtx();
+            if (ctx == null) return;
+            long now = System.currentTimeMillis();
+            Map<String, Object[]> saved = AppPrefs.loadSessions(ctx);
+            for (Map.Entry<String, Object[]> e : saved.entrySet()) {
+                Object[] v = e.getValue();
+                if (v == null || v.length < 2) continue;
+                long exp = ((Number) v[1]).longValue();
+                if (exp <= now) continue;
+                sessions.put(e.getKey(), String.valueOf(v[0]));
+                sessionExp.put(e.getKey(), exp);
+            }
+            if (!saved.isEmpty()) {
+                log("恢复登录会话 " + sessions.size() + " 个");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
 
     private String sessionCreate(String user) {
         String tok = newToken();
         sessions.put(tok, user);
-        sessionExp.put(tok, SystemClock.elapsedRealtime() + SESSION_TTL_MS);
+        sessionExp.put(tok, System.currentTimeMillis() + SESSION_TTL_MS);
+        persistSessions();
         return tok;
     }
 
     private String sessionGet(String token) {
         Long exp = sessionExp.get(token);
         if (exp == null) return null;
-        if (SystemClock.elapsedRealtime() > exp) {
+        if (System.currentTimeMillis() > exp) {
             sessionKill(token);
             return null;
         }
@@ -300,8 +364,9 @@ public class HttpServer {
     }
 
     private void sessionKill(String token) {
-        sessions.remove(token);
+        boolean had = sessions.remove(token) != null;
         sessionExp.remove(token);
+        if (had) persistSessions();
     }
 
     // ---- 跨端免登录的「交接票」 ----
@@ -600,6 +665,9 @@ public class HttpServer {
         } catch (Throwable ignored) {
             this.prefTheme = AppPrefs.THEME_DARK;
         }
+        // 把上次落盘的登录会话接回来：服务端重启/被系统杀掉之后，
+        // 客户端存的 sid 还能直接用（见 restoreSessions 的注释）。
+        restoreSessions();
     }
 
     /**
@@ -837,7 +905,9 @@ public class HttpServer {
         // 书库正文抽取：这是真·正文，但它和 /view、/play/* 是同一层东西 ——
         // 能看列表就能看内容（文件本身也一直是这么发的）。差别在于这里给了
         // resolve() + inDirs() 两道约束，只能抽书库目录里的书。
-        if (p != null && p.equals("/_books/text")) {
+        // PDF 单页图与 /_books/text 同一口径：能看列表就能看正文，
+        // handler 里同样过 resolve() + inDirs()，越不出书库目录。
+        if (p != null && (p.equals("/_books/text") || p.equals("/_books/pdf"))) {
             return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
         }
         if (!cfg.hasAccounts()) return true;
@@ -1300,6 +1370,13 @@ public class HttpServer {
         // 书库正文抽取：客户端内嵌阅读用，docx/doc/epub/txt 都转成纯文本
         if (path.equals("/_books/text")) {
             handleBookText(req, out);
+            return;
+        }
+
+        // PDF 单页渲染：桌面客户端没有 PDF 引擎（不引 PDFBox），
+        // 由服务端用系统自带的 PdfRenderer 渲成 JPEG 让客户端当图片翻页。
+        if (path.equals("/_books/pdf")) {
+            handleBookPdf(req, out);
             return;
         }
 
@@ -2604,10 +2681,17 @@ public class HttpServer {
 
         // 同一层里先收集歌词名，后面给音频挂上去，省一次目录遍历
         Set<String> lrcBase = null;
-        // 封面：同名图（歌名.jpg）优先，目录通用图（cover.jpg / folder.jpg / front.jpg）兜底。
-        // 跟 walkMusic 里 lrc 的收集方式一样，只在这一层扫一遍目录。
+        // 封面只认同名图（歌名.jpg / 歌名.png），**不再退「目录通用图」**。
+        //
+        // 原来这里有个 dirCover 兜底：本层出现 cover.jpg / folder.jpg / front.jpg
+        // 就把它当成整层所有歌的封面。实际用起来是灾难 —— 用户把一张电影海报
+        // 存成 音乐/folder.jpg 之后，1116 首歌的唱片内圈全变成了那张海报
+        // （实测 md5 与 电影/山村老尸-post.jpg 完全一致），看起来像「音乐封面
+        // 变成了影视封面」。一张目录图代表整层，只对「一张专辑一个目录、
+        // 目录里就这一张图」成立；平铺的曲库根本不成立。
+        // 现在的规则：这首歌自己配了同名图就用，否则文件里有内嵌封面就用内嵌
+        // （见 i 键 + /cover 端点），两样都没有就是没有封面，客户端画默认贴纸。
         Map<String, File> covers = null;   // 小写主干 -> 同名封面文件
-        File dirCover = null;              // 目录通用封面
         for (File f : list) {
             String n = f.getName();
             if (n.startsWith(".")) continue;
@@ -2621,10 +2705,8 @@ public class HttpServer {
             } else if (COVER_EXT.contains(ext)) {
                 String base = n.substring(0, dot);
                 String low = base.toLowerCase(Locale.ROOT);
-                if (COVER_GENERIC.contains(low)) {
-                    // 通用封面只认第一个，顺序按 listFiles() 给的来，够用了
-                    if (dirCover == null) dirCover = f;
-                } else {
+                // 通用名不进同名表：它们不指向某一首歌，收进来也没人会去查
+                if (!COVER_GENERIC.contains(low)) {
                     if (covers == null) covers = new HashMap<>();
                     if (!covers.containsKey(low)) covers.put(low, f);
                 }
@@ -2658,12 +2740,12 @@ public class HttpServer {
                 t.lrc = base + ".lrc";
                 readLrcTags(new File(dir, t.lrc), t);
             }
-            // 封面：先找同名，再退回目录通用图
+            // 封面：只认这首歌自己的同名图（Music/folder.jpg 这类目录图已被上面的
+            // 收集阶段排除），没有就交给内嵌封面，再没有就空着让客户端画贴纸
             if (covers != null) {
                 File c = covers.get(base.toLowerCase(Locale.ROOT));
                 if (c != null) t.cover = c.getAbsolutePath();
             }
-            if (t.cover == null && dirCover != null) t.cover = dirCover.getAbsolutePath();
             out.add(t);
         }
 
@@ -3465,6 +3547,202 @@ public class HttpServer {
           .append(",\"text\":").append(jsonEsc(text))
           .append('}');
         sendJson(out, sb.toString());
+    }
+
+    // ==================== PDF 单页渲染（桌面客户端内嵌阅读） ====================
+
+    /** 客户端要的那一页宽度上限。1600 已经比 1080p 全屏阅读还清楚了。 */
+    private static final int PDF_PAGE_MAX_W = 1600;
+    /** 不给 w 时的默认宽度：1240 在 1080p 上按一屏一页读刚好不糊。 */
+    private static final int PDF_PAGE_DEF_W = 1240;
+    /** 边长上限：异形超长页（地图、长条图）按高度反钳，避免一次分配几百 MB。 */
+    private static final int PDF_PAGE_MAX_H = 2400;
+    private static final int PDF_PAGE_QUALITY = 82;
+    /**
+     * 页码缓存。一页 1240 宽的 A4 渲染成 JPEG 大约 150–400KB，
+     * 按条数限 60 条 ≈ 10–20MB —— 和 photoThumbCache 同一个量级。
+     */
+    private final java.util.LinkedHashMap<String, byte[]> pdfPageCache =
+            new java.util.LinkedHashMap<String, byte[]>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
+                    return size() > 60;
+                }
+            };
+
+    /**
+     * PdfRenderer 不是线程安全的：同一个实例同一时刻只能开一个 Page，
+     * 而这里是多线程 accept 的。所有渲染串行化，代价是两个人同时翻同一本书
+     * 会排队 —— 局域网里就一台手机在渲，这个代价可以忽略。
+     */
+    private final Object pdfLock = new Object();
+
+    /**
+     * 渲一页 PDF 成 JPEG。桌面客户端没有 PDF 引擎（引 PDFBox 会让
+     * 52MB 的安装包再翻一倍），所以让服务端渲：Android 自带 PdfRenderer，
+     * 一行依赖都不加。
+     *
+     * <p>GET /_books/pdf?f=&lt;路径&gt;&amp;page=0&amp;w=1240 → image/jpeg
+     * <br>GET /_books/pdf?f=&lt;路径&gt;&amp;meta=1 → {"ok":true,"pages":N,"name":..}
+     */
+    private void handleBookPdf(Request req, OutputStream out) throws IOException {
+        File f = resolve(req.param("f"));
+        if (f == null || !f.isFile()) {
+            sendJson(out, "{\"ok\":false,\"error\":\"file not found\"}");
+            return;
+        }
+        // 与 /_books/text 同一条防线：只肯渲书库目录里的文件。
+        if (!inDirs(f, cfg.bookDirs)) {
+            sendJson(out, "{\"ok\":false,\"error\":\"out of scope\"}");
+            return;
+        }
+        String name = f.getName();
+        if (!name.toLowerCase().endsWith(".pdf")) {
+            sendJson(out, "{\"ok\":false,\"error\":\"不是 PDF\"}");
+            return;
+        }
+
+        ParcelFileDescriptor pfd = null;
+        PdfRenderer r = null;
+        try {
+            pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
+            r = new PdfRenderer(pfd);
+            int pages = r.getPageCount();
+            if (pages <= 0) {
+                sendJson(out, "{\"ok\":false,\"error\":\"这份 PDF 一页都没有\"}");
+                return;
+            }
+
+            // 只要页数：客户端开书先问一次，用来画页码条和总页数。
+            if ("1".equals(req.param("meta"))) {
+                String title = name.substring(0, name.length() - 4);
+                sendJson(out, "{\"ok\":true,\"pages\":" + pages
+                        + ",\"name\":" + jsonEsc(name)
+                        + ",\"title\":" + jsonEsc(title)
+                        + ",\"size\":" + f.length() + "}");
+                return;
+            }
+
+            int page = 0;
+            String ps = req.param("page");
+            if (ps != null && !ps.isEmpty()) {
+                try {
+                    page = Integer.parseInt(ps.trim());
+                } catch (NumberFormatException nfe) {
+                    page = 0;
+                }
+            }
+            if (page < 0) page = 0;
+            if (page >= pages) page = pages - 1;
+
+            int want = PDF_PAGE_DEF_W;
+            String ws = req.param("w");
+            if (ws != null && !ws.isEmpty()) {
+                try {
+                    want = Integer.parseInt(ws.trim());
+                } catch (NumberFormatException nfe) {
+                    want = PDF_PAGE_DEF_W;
+                }
+            }
+            if (want <= 0) want = PDF_PAGE_DEF_W;
+            if (want > PDF_PAGE_MAX_W) want = PDF_PAGE_MAX_W;
+
+            String key = f.getAbsolutePath() + "|" + f.lastModified() + "|" + page + "|" + want;
+            byte[] data;
+            synchronized (pdfPageCache) {
+                data = pdfPageCache.get(key);
+            }
+            if (data == null) {
+                synchronized (pdfLock) {
+                    data = renderPdfPage(r, page, want);
+                }
+                if (data == null) {
+                    sendJson(out, "{\"ok\":false,\"error\":\"这一页渲不出来（PDF 可能加密或已损坏）\"}");
+                    return;
+                }
+                synchronized (pdfPageCache) {
+                    pdfPageCache.put(key, data);
+                }
+            }
+
+            String tag = "\"" + data.length + "-" + f.lastModified() + "-" + page + "-" + want + "\"";
+            String inm = req.headers.get("if-none-match");
+            if (inm != null && inm.contains(tag.replace("\"", ""))) {
+                String head = "HTTP/1.1 304 Not Modified\r\n"
+                        + "Server: " + cfg.title + "\r\n"
+                        + "ETag: " + tag + "\r\n"
+                        + "Connection: close\r\n\r\n";
+                out.write(head.getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                return;
+            }
+            String head = "HTTP/1.1 200 OK\r\n"
+                    + "Server: " + cfg.title + "\r\n"
+                    + "Content-Type: image/jpeg\r\n"
+                    + "Content-Length: " + data.length + "\r\n"
+                    + "ETag: " + tag + "\r\n"
+                    + "X-Pdf-Pages: " + pages + "\r\n"
+                    + "Cache-Control: private, max-age=86400\r\n"
+                    + "Connection: close\r\n\r\n";
+            out.write(head.getBytes(StandardCharsets.UTF_8));
+            out.write(data);
+            out.flush();
+        } catch (Throwable t) {
+            log("PDF 渲染失败 " + f.getName() + "：" + t);
+            sendJson(out, "{\"ok\":false,\"error\":\"渲染失败：" + jsonEsc(String.valueOf(t)) + "\"}");
+        } finally {
+            if (r != null) {
+                try { r.close(); } catch (Throwable ignored) { }
+            }
+            if (pfd != null) {
+                try { pfd.close(); } catch (Throwable ignored) { }
+            }
+        }
+    }
+
+    /**
+     * 把第 page 页渲成宽 want 的 JPEG。PdfRenderer 的坐标单位是 1/72 英寸（point），
+     * 所以要按页宽自己算缩放。
+     *
+     * <p>这里必须允许「放大」：很多扫描版 PDF 的页宽只有 500 多个 point，
+     * 按原尺寸渲出来是 515×728，在 1080p 窗口里糊得不能看。PdfRenderer 会按
+     * 目标位图尺寸重新栅格化，放大反而更清楚（1000 多宽的扫描页就是实打实的细节）。
+     * 高度另设上限，防止异形长页把内存吃光。
+     *
+     * <p>白底必须自己刷 —— 位图默认全透明，存成 JPEG 会变成纯黑，
+     * 桌面端看到的就是一张黑纸。
+     */
+    private static byte[] renderPdfPage(PdfRenderer r, int page, int want) {
+        PdfRenderer.Page pg = null;
+        Bitmap bmp = null;
+        try {
+            pg = r.openPage(page);
+            int pw = pg.getWidth();
+            int ph = pg.getHeight();
+            if (pw <= 0 || ph <= 0) return null;
+            int w = Math.max(1, want);
+            int h = Math.max(1, Math.round(ph * (w / (float) pw)));
+            if (h > PDF_PAGE_MAX_H) {   // 超长页按高度反钳宽度
+                w = Math.max(1, Math.round(w * (PDF_PAGE_MAX_H / (float) h)));
+                h = PDF_PAGE_MAX_H;
+            }
+            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            // 先铺白：PdfRenderer 只画内容，不会帮你刷背景。
+            new Canvas(bmp).drawColor(Color.WHITE);
+            pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
+            bmp.compress(Bitmap.CompressFormat.JPEG, PDF_PAGE_QUALITY, bos);
+            return bos.toByteArray();
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (pg != null) {
+                try { pg.close(); } catch (Throwable ignored) { }
+            }
+            if (bmp != null) {
+                try { bmp.recycle(); } catch (Throwable ignored) { }
+            }
+        }
     }
 
     /** docx：zip 里读 word/document.xml，段落标签换成换行，其余标签丢掉 */

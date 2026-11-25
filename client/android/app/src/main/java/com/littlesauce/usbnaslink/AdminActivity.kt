@@ -210,7 +210,12 @@ class AdminActivity : android.app.Activity() {
                 stateListAnimator = null
                 background = Palette.round(this@AdminActivity, Palette.ACCENT, 9f)
                 setOnClickListener {
-                    startActivity(BrowseActivity.intent(this@AdminActivity, baseUrl, null))
+                    // 按钮写「去登录」时首屏直接给表单；写「切换用户」时先给首页
+                    // （那时他已经登录了，多半是想去网页端干别的事）。
+                    startActivity(
+                        if (st.logged) BrowseActivity.intent(this@AdminActivity, baseUrl, null)
+                        else BrowseActivity.loginIntent(this@AdminActivity, baseUrl, null)
+                    )
                 }
             }
             body.addView(b, LinearLayout.LayoutParams(

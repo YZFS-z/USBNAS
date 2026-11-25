@@ -49,6 +49,21 @@ public final class Session {
         return hasSid() ? COOKIE + "=" + sid : "";
     }
 
+    /**
+     * 把裸 sid 拼成能直接塞进 `Cookie` 头（或 MediaPlayer 的 headers）的值。
+     *
+     * 为什么单独开一个方法：`Cookie` 头要的是 `name=value` 整串，而 App 里到处
+     * 存的都是裸 sid。直接把裸 sid 当头的值传出去，服务端读不到 `usbnas_sid`
+     * 就按匿名处理 —— 症状是「明明登录着，点播却说登录过期」，和真的过期
+     * 长得一模一样。这个错在探针、音乐播放器、视频播放器里各犯过一次。
+     *
+     * @param sid 裸 sid，或已经是 `usbnas_sid=...` 的整串（原样返回）
+     */
+    public static String cookieHeader(String sid) {
+        if (sid == null || sid.isEmpty()) return "";
+        return sid.indexOf('=') >= 0 ? sid : COOKIE + "=" + sid;
+    }
+
     public void setSid(String s) {
         this.sid = s == null ? "" : s;
     }
@@ -305,6 +320,64 @@ public final class Session {
             return new String(bo.toByteArray(), StandardCharsets.UTF_8);
         } catch (Throwable t) {
             return "";
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /**
+     * 最近一次 [statusOf] 拿到的错误正文（成功时为空串）。
+     *
+     * 服务端 401 时回的是「先登录才能看内容（清单可以随便看）」那段 HTML，
+     * 把它带出来，排查时能立刻分清是「要登录」还是「路径不对」。
+     */
+    private static volatile String lastBody = "";
+
+    public static String lastBody() {
+        return lastBody;
+    }
+
+    /**
+     * 探一下「这个地址在带/不带 sid 时分别返回什么状态码」。
+     *
+     * 用来区分三种「取不到」：服务端根本没有这个文件（404）、要登录而我们
+     * 没登录或者 sid 已经失效（401）、以及其它错误。客户端拿到 401 就该说
+     * 「登录过期了」，而不是让界面显示成语义完全不同的「文件不存在」。
+     *
+     * @param cookie 裸 sid（`db4997...`）或完整的 `usbnas_sid=db4997...`
+     * @return HTTP 状态码；连不上返回 0
+     */
+    public static int statusOf(String url, String cookie) {
+        lastBody = "";
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestMethod("GET");
+            if (cookie != null && !cookie.isEmpty()) {
+                c.setRequestProperty("Cookie", cookieHeader(cookie));
+            }
+            c.setRequestProperty("User-Agent", "USBNASLink/1.0");
+            // 只要状态码，不要正文：视频文件可能是几十 GB，读完就没意义了
+            c.setRequestProperty("Range", "bytes=0-0");
+            c.setConnectTimeout(Probe.CONNECT_TIMEOUT * 4);
+            c.setReadTimeout(Probe.READ_TIMEOUT * 2);
+            int code = c.getResponseCode();
+            if (code >= 400) {
+                // 出错时把正文带出来：服务端 401 会回一段说明（"先登录才能看内容"），
+                // 光看状态码分不清「要登录」和「路径不对」。
+                java.io.InputStream es = c.getErrorStream();
+                if (es != null) {
+                    java.io.ByteArrayOutputStream eo = new java.io.ByteArrayOutputStream();
+                    byte[] eb = new byte[2048];
+                    int en;
+                    while ((en = es.read(eb)) > 0 && eo.size() < 4096) eo.write(eb, 0, en);
+                    es.close();
+                    lastBody = new String(eo.toByteArray(), "UTF-8");
+                }
+            }
+            return code;
+        } catch (Throwable t) {
+            return 0;
         } finally {
             if (c != null) c.disconnect();
         }

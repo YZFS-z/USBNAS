@@ -58,9 +58,6 @@ class LibraryActivity : AppCompatActivity() {
         /** 「管理设置」页签下标（影视 0 / 音乐 1 / 图书 2 / 相册 3 / 管理设置 4 / 网页 5） */
         private const val TAB_MANAGE = 4
 
-        /** 从网页回来时用来判断「用户是去登录的」，服务端不用，纯本地意图标记 */
-        private const val EXTRA_LOGIN_TRY = "login_try"
-
         /** 多选批量删除单批上限：一次 POST 删太多会让服务端一口气卡住好几秒 */
         private const val PHOTO_DEL_BATCH = 40
 
@@ -122,6 +119,13 @@ class LibraryActivity : AppCompatActivity() {
     private lateinit var photoHost: LinearLayout
     private lateinit var manageHost: LinearLayout
     private lateinit var hint: TextView
+
+    /**
+     * 「登录过期」提示条（可点，点了去网页端登录）。
+     *
+     * 只在 [checkAuth] 确定 sid 失效时才出现，默认 GONE。
+     */
+    private lateinit var authBar: TextView
     private lateinit var spinner: ProgressBar
 
     /**
@@ -172,6 +176,22 @@ class LibraryActivity : AppCompatActivity() {
      * 只在 `ui.post` 里改，天然串行。
      */
     private val pending = LinkedHashSet<Int>()
+
+    /**
+     * 「服务端认得这个 sid 吗」的最近一次答案。
+     *
+     * 为什么需要单独一个字段：三个清单端点（/_videos /_music /_books）在服务端
+     * 是**匿名可读**的，sid 过期它们照样 200 并返回完整列表 —— 于是从清单本身
+     * 完全看不出登录已经失效。真正会 401 的是「取文件」（播放、缩略图、读正文），
+     * 而那时用户已经点了播放，体验上就变成「能看见片名但放不了」。
+     *
+     * 所以进库时顺手问一次 /_admin/api 的 logged 字段（见 [checkAuth]），
+     * 失效就在每页顶上挂一条提示，用户不必等到点了播放才发现。
+     */
+    private var authLost = false
+
+    /** 正在问登录态，防抖用（onResume + 切页签可能同时触发） */
+    private var authChecking = false
 
     private var currentTab = 0
 
@@ -343,6 +363,18 @@ class LibraryActivity : AppCompatActivity() {
             text = getString(R.string.common_loading)
         }
         root.addView(hint)
+
+        // 「登录过期」的常驻提示条：清单能拿（匿名可读），但点播放/看大图/读正文
+        // 会被 401 挡回来，那时才发现就太晚了。放在 hint 下面而不是弹窗，
+        // 是因为它不是错误而是「现状说明」，不该打断用户浏览。
+        authBar = TextView(this).apply {
+            setTextColor(Palette.WARN_HI)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            visibility = View.GONE
+            setOnClickListener { openWebForLogin() }
+        }
+        root.addView(authBar)
 
         scroll = ScrollView(this)
         val host = LinearLayout(this).apply {
@@ -564,9 +596,20 @@ class LibraryActivity : AppCompatActivity() {
     private fun buildVideos() {
         videoHost.removeAllViews()
         val lib = vlib
-        if (lib == null || lib.videos.isEmpty()) {
-            videoHost.addView(msg(if (lib == null) "…" else
-                getString(R.string.lib_empty_video)))
+        if (lib == null) {
+            videoHost.addView(msg("…"))
+            return
+        }
+        // 「取失败」和「真的没有片」必须分开说。
+        // 原来这里只有 `lib.videos.isEmpty()` 一条分支，于是服务端重启导致 sid 失效
+        // （/_videos 照样 200，但每个文件 401）或者网络断了，界面都只写
+        // 「还没有影视」—— 用户以为硬盘上的片子没了，实际是登录过期。
+        if (!lib.ok) {
+            videoHost.addView(loginOrFailCard(lib.error ?: ""))
+            return
+        }
+        if (lib.videos.isEmpty()) {
+            videoHost.addView(msg(getString(R.string.lib_empty_video)))
             return
         }
         // 按服务端给的 groups 分块：盘0 / 盘1 / 内部存储 各成一段，
@@ -691,9 +734,17 @@ class LibraryActivity : AppCompatActivity() {
     private fun buildMusic() {
         musicHost.removeAllViews()
         val lib = mlib
-        if (lib == null || lib.tracks.isEmpty()) {
-            musicHost.addView(msg(if (lib == null) "…" else
-                getString(R.string.lib_empty_music)))
+        if (lib == null) {
+            musicHost.addView(msg("…"))
+            return
+        }
+        // 同 buildVideos：取失败 ≠ 真没有，见 loginOrFailCard 的注释
+        if (!lib.ok) {
+            musicHost.addView(loginOrFailCard(lib.error ?: ""))
+            return
+        }
+        if (lib.tracks.isEmpty()) {
+            musicHost.addView(msg(getString(R.string.lib_empty_music)))
             return
         }
         val hits = Music.filter(lib.tracks, query)
@@ -893,6 +944,11 @@ class LibraryActivity : AppCompatActivity() {
         // 封面绝对路径（可能是 null）：播放页拿去拼直链、在后台线程解码，
         // 解不出来就退回自绘蓝贴纸，不会因为一张图报错而影响播放
         i.putExtra(PlayerActivity.EXTRA_COVERS, album.map { it.cover ?: "" }.toTypedArray())
+        // 内嵌封面标记也要跟着走：上面的 covers 只覆盖「目录里有同名图」的情况，
+        // 内嵌封面（ID3 APIC / FLAC PICTURE）在 track.cover 上是 null，全靠这个标记。
+        // 漏传的话 PlayerActivity 里的 Track 全是 embedded=false，
+        // loadCover 的 hasCover() 直接假 → 有内嵌封面的歌也只画贴纸。
+        i.putExtra(PlayerActivity.EXTRA_EMBEDS, album.map { if (it.embedded) "1" else "" }.toTypedArray())
         i.putExtra(PlayerActivity.EXTRA_START, album.indexOf(t))
         startActivity(i)
     }
@@ -913,7 +969,7 @@ class LibraryActivity : AppCompatActivity() {
             return
         }
         if (!lib.ok) {
-            bookHost.addView(msg(getString(R.string.lib_books_failed, lib.error ?: "")))
+            bookHost.addView(loginOrFailCard(lib.error ?: ""))
             return
         }
         if (lib.notConfigured()) {
@@ -1033,12 +1089,10 @@ class LibraryActivity : AppCompatActivity() {
             return
         }
         if (!lib.ok) {
-            photoHost.addView(msg(getString(R.string.lib_photos_failed, lib.error ?: "")))
-            photoHost.addView(Palette.outline(this, getString(R.string.common_retry)).apply {
-                setOnClickListener { loadPhotos() }
-            }, LinearLayout.LayoutParams(dp(108), dp(38)).apply {
-                leftMargin = dp(16); topMargin = dp(4); bottomMargin = dp(12)
-            })
+            // 相册清单本身是匿名的（/=_photos 白名单里放行），所以拿不到基本只有
+            // 「连不上」一种可能；但如果是 401（服务端配了不许匿名 + 全是私图），
+            // 也走同一张卡片，反正按钮都是「去登录 / 重试」。
+            photoHost.addView(loginOrFailCard(lib.error ?: ""))
             return
         }
         if (lib.notConfigured()) {
@@ -1679,6 +1733,82 @@ class LibraryActivity : AppCompatActivity() {
         setPadding(dp(18), dp(20), dp(18), dp(20))
     }
 
+    /**
+     * 「取不到」的说明卡片。
+     *
+     * 光靠一句话分不清三件事：服务端真没这个东西 / 登录过期 / 网络断了。
+     * 三者的处置完全不同（去配目录 / 去登录 / 等等再来），所以这里给一句
+     * 具体原因 + 一个对症的按钮：
+     *   - 是 401 或身份不明 → 主按钮直接进网页端登录页，次按钮是「已经登好了，刷新」；
+     *   - 其它错误（超时、连不上）→ 只给一个「重试」。
+     *
+     * 为什么不在发现 401 时自动弹窗：拉清单是在 onResume / 切页签时静默发生的，
+     * 一进 App 就糊一个「登录过期」的对话框很打扰；而且用户可能只是想看一眼上
+     * 次连的是哪台机器。写成卡片，用户滑到哪页就在哪页看到，不打断。
+     */
+    private fun loginOrFailCard(reason: String): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(10))
+        }
+        // HTTP 401 是本 App 里唯一能确定「就是登录的事」的信号；
+        // 其它错误一律按「取不到 + 原因」呈现，不去猜。
+        val authIssue = reason.contains("401")
+        box.addView(Palette.note(this,
+            if (authIssue) getString(R.string.lib_need_login)
+            else getString(R.string.lib_all_failed, reason),
+            if (authIssue) Palette.WARN_HI else Palette.DIM).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setLineSpacing(dp(4).toFloat(), 1f)
+        })
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        if (authIssue) {
+            row.addView(Palette.solid(this, getString(R.string.lib_need_login_go)).apply {
+                setOnClickListener { openWebForLogin() }
+            }, LinearLayout.LayoutParams(dp(120), dp(38)).apply { rightMargin = dp(8) })
+            row.addView(Palette.outline(this, getString(R.string.lib_need_login_retry)).apply {
+                setOnClickListener { retryAll() }
+            }, LinearLayout.LayoutParams(dp(180), dp(38)))
+        } else {
+            row.addView(Palette.outline(this, getString(R.string.common_retry)).apply {
+                setOnClickListener { retryAll() }
+            }, LinearLayout.LayoutParams(dp(96), dp(38)))
+        }
+        box.addView(row)
+        return box
+    }
+
+    /** 按 [authLost] 决定那条提示条显不显示；文案里带上「点一下就去登录」。 */
+    private fun renderAuthBar() {
+        if (authLost) {
+            authBar.text = getString(R.string.lib_auth_lost_bar)
+            authBar.visibility = View.VISIBLE
+        } else {
+            authBar.visibility = View.GONE
+        }
+    }
+
+    /**
+     * 把三条腿的缓存全作废、重新拉一遍。
+     *
+     * 登录完从网页回来、或者网络恢复之后用。清 `vlib/mlib/blib/plib` 是关键：
+     * [ensureLoaded] 靠「已经是 null 了吗」判断要不要拉，不清就只会重建视图、
+     * 拿的还是上次那个失败的结果。
+     */
+    private fun retryAll() {
+        vlib = null
+        mlib = null
+        blib = null
+        plib = null
+        // sid 也可能刚在网页里换过：重读一次，别拿内存里那个旧的去撞 401
+        refreshSid()
+        reload()
+        if (currentTab == TAB_PHOTO) loadPhotos()
+    }
+
     private fun openWeb() {
         val i = Intent(this, BrowseActivity::class.java)
         i.putExtra(BrowseActivity.EXTRA_URL, baseUrl)
@@ -1696,11 +1826,9 @@ class LibraryActivity : AppCompatActivity() {
      * 重新拉一遍，而不是让用户去杀进程。
      */
     private fun openWebForLogin() {
-        val i = Intent(this, BrowseActivity::class.java)
-        i.putExtra(BrowseActivity.EXTRA_URL, baseUrl)
-        i.putExtra(BrowseActivity.EXTRA_NAME, intent.getStringExtra(EXTRA_NAME))
-        i.putExtra(EXTRA_LOGIN_TRY, true)
-        startActivity(i)
+        // 用 loginIntent：用户从这条红条进来只为了交一次密码，首屏就直接是表单。
+        startActivity(BrowseActivity.loginIntent(
+            this, baseUrl, intent.getStringExtra(EXTRA_NAME)))
     }
 
     override fun onResume() {
@@ -1708,22 +1836,81 @@ class LibraryActivity : AppCompatActivity() {
         // 「管理设置」里的自动更新也可能走到「去开安装权限」那一步，
         // 从系统设置回来时在这里把留着没装的包装掉（没留包时是个空调用）。
         ApkUpdater.resumePending(this)
-        // 只在「管理设置」页签可见时才刷新：其它页签刷新没必要，还会多打一次请求。
-        // 注意这里要先从 Prefs 里把 sid 读回来 —— 用户在网页端登录成功后，
-        // BrowseActivity.onPageFinished 会把服务端新发的 sid 写进 Prefs，
-        // 而本 Activity 的 sid 字段还是打开网页之前那个（已失效的）。
-        // 不重读，就会出现「明明刚登录完，回到管理设置仍写着未登录」。
+        // 先把 sid 从 Prefs 重读一次，任何页签都重读 —— 不能只在「管理设置」页里做。
+        //
+        // 踩过的坑：用户在网页端登录成功后，BrowseActivity.onPageFinished 会把
+        // 服务端新发的 sid 写进 Prefs，而本 Activity 的 sid 字段还停在打开网页
+        // 之前那个（已经失效的）。原来的重读被 `currentTab == TAB_MANAGE` 挡住了，
+        // 于是从影视/音乐页回来时，列表是新的、播放却一直 401 —— 表现成
+        // 「原本能播的片子突然全都播放不了」，查起来极费劲。
+        refreshSid()
         if (currentTab == TAB_MANAGE && manageHost.childCount > 0) {
-            val fresh = Prefs(this).sid
-            if (!fresh.isNullOrEmpty() && fresh != sid) {
-                sid = fresh
-            }
             loadManage(false)
         }
+        // 每次回前台顺手确认一次「服务端还认不认这个 sid」。
+        // 从网页登录完回来时这一步尤其重要：sid 换了，得重新判定一次。
+        checkAuth()
         // 配色跟着服务端走：每次回到前台问一次（ThemeCtl 内部有 20 秒节流，
         // 切页签/开网页回来都不会真的打请求）。问到的和服务端不一致时
         // ThemeCtl 会回调这里重建界面 —— 只重建、不弹提示，因为这不是用户的操作。
         ThemeCtl.sync(this, baseUrl, sid) { recreate() }
+    }
+
+    /**
+     * 把内存里的 sid 和服务端发给我们的那份对齐。
+     *
+     * @return true 表示确实换了（调用方需要重建列表的话可以据此判断）
+     */
+    private fun refreshSid(): Boolean {
+        val fresh = Prefs(this).sid
+        if (fresh.isNullOrEmpty() || fresh == sid) return false
+        sid = fresh
+        return true
+    }
+
+    /**
+     * 问一次服务端「这个 sid 还算数吗」，失效时在内容区顶部挂一条提示。
+     *
+     * 为什么必须单独问：清单端点匿名可读（见 [authLost] 的注释），清单拿得回来
+     * 不代表能放片。等到用户点播才报 401，他只会觉得「这个 App 坏了」。
+     *
+     * 判定结果只保留「确定失效」这一种：`logged()` 返回 null 表示问不到
+     * （网络断了、服务端没起、老版本没这个字段），那时**不要**提示登录 ——
+     * 网络问题被说成登录过期，用户会白跑一趟网页端。
+     */
+    private fun checkAuth() {
+        if (authChecking) return
+        val base = baseUrl
+        val ck = sid
+        if (ck.isNullOrEmpty()) {
+            // 压根没有 sid：可能是这台机器根本没开账号，也可能是从没登过。
+            // 分不清就不提示，等真发生 401 时 [loginOrFailCard] 会说。
+            return
+        }
+        authChecking = true
+        post {
+            val sess = Session(base)
+            sess.setSid(ck)
+            val ok = sess.logged()
+            ui.post {
+                authChecking = false
+                // 请求期间用户可能换了服务器/重新登录，结果就作废了
+                if (base != baseUrl || ck != sid) return@post
+                val lost = ok == false
+                if (lost != authLost) {
+                    authLost = lost
+                    renderAuthBar()
+                    // 状态变了才重画：每次都重画会把用户正在滚的位置弹回顶部
+                    if (currentTab != TAB_MANAGE && currentTab != TAB_WEB) {
+                        when (currentTab) {
+                            TAB_VIDEO -> buildVideos()
+                            TAB_MUSIC -> buildMusic()
+                            TAB_BOOK -> buildBooks()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /** 第四个页签「管理设置」：先建 App 自身设置（同步、不联网），NAS 全局配置异步填 */

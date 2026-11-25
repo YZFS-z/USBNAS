@@ -169,13 +169,17 @@ final class VideoWindow extends JFrame {
         lastUrl = url;
         try {
             uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer mp = comp.mediaPlayer();
-            // 认证靠 Cookie：服务端有账号时 /play/video 与文件流都要 sid。
-            // VLC 没有「设置请求头」的官方参数，用 :http-cookie 传 Cookie 头内容。
-            String[] opts = cookie == null || cookie.isEmpty()
-                    ? new String[]{"--no-video-title-show"}
-                    : new String[]{"--no-video-title-show",
-                        ":http-cookie=" + com.littlesauce.usbnaslink.Session.COOKIE + "=" + cookie};
-            boolean ok = mp.media().play(url, opts);
+            // 认证只能走 URL userinfo（HTTP Basic）。libvlc 3.0 的 http 插件没有
+            // :http-cookie，也没有注入 Authorization 头的入口 —— 以前那行
+            // ":http-cookie=usbnas_sid=…" 是个哑参数，视频一律静默 401，
+            // 表现就是「黑屏但时间不走」。这里按主机补上 user:pass@。
+            String real = Creds.inject(url);
+            String[] opts = new String[]{
+                    "--no-video-title-show",
+                    ":http-referrer=",
+                    ":http-user-agent=USBNASLink/1.0",
+            };
+            boolean ok = mp.media().play(real, opts);
             if (!ok) {
                 note.setText("这部片打不开（编码或网络问题）");
                 note.setForeground(Theme.ERR);
