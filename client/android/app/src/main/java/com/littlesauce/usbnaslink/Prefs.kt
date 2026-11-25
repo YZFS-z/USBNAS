@@ -103,6 +103,18 @@ class Prefs(ctx: Context) {
             sp.edit().putString(KEY_LANG, v).apply()
         }
 
+    /**
+     * 歌词时间轴的人手位移（毫秒，正数 = 歌词往后推/变慢）。
+     *
+     * 与桌面端 `LrcView.offsetMs`（java.util.prefs 键 lyric.offset.ms）是同一个概念：
+     * 音词时间对不上时用户自己 ±0.5s 微调，跨重启保留。范围由 Player 钳在 ±10s。
+     */
+    var lyricOffsetMs: Long
+        get() = sp.getLong(KEY_LYRIC_OFFSET, 0L)
+        set(v) {
+            sp.edit().putLong(KEY_LYRIC_OFFSET, v).apply()
+        }
+
     private companion object {
         const val KEY_URL = "last_url"
         const val KEY_NAME = "last_name"
@@ -114,5 +126,6 @@ class Prefs(ctx: Context) {
         const val KEY_REMEMBER = "remember_device"
         const val KEY_THEME = "theme"
         const val KEY_LANG = "lang"
+        const val KEY_LYRIC_OFFSET = "lyric_offset_ms"
     }
 }

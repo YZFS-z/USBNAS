@@ -1927,6 +1927,7 @@ class LibraryActivity : AppCompatActivity() {
         manageHost.addView(serverStatusCard())
         manageHost.addView(nasSettingsCard())
         manageHost.addView(accountsCard())
+        manageHost.addView(shareCard())
         manageHost.addView(blockHeader(getString(R.string.set_client_section),
             getString(R.string.set_client_section_note)))
         manageHost.addView(languageCard())
@@ -1997,6 +1998,34 @@ class LibraryActivity : AppCompatActivity() {
         row.addView(Palette.outline(this, getString(R.string.common_refresh)).apply {
             setOnClickListener { refreshManage(true) }
         }, LinearLayout.LayoutParams(dp(72), dp(36)).apply { leftMargin = dp(8) })
+        return row
+    }
+
+    /**
+     * 「分享管理」入口卡片。
+     *
+     * 服务端的 /_share/new|drop|list 早就有了，网页端也在用；这里给手机端一个
+     * 入口，做到三端同步 —— 生成短链后能直接用 ACTION_SEND 发出去。真实现全在
+     * [ShareActivity]，这一行只是导航，避免把大段 UI 塞进本页。
+     */
+    private fun shareCard(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(2), dp(16), dp(10))
+        }
+        row.addView(TextView(this).apply {
+            text = "分享管理"
+            textSize = 14f
+            setTextColor(Palette.FG)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            rightMargin = dp(8)
+        })
+        row.addView(Palette.outline(this, "打开").apply {
+            setOnClickListener {
+                startActivity(ShareActivity.intent(this@LibraryActivity, baseUrl, sid))
+            }
+        }, LinearLayout.LayoutParams(dp(80), dp(36)))
         return row
     }
 

@@ -100,6 +100,21 @@ final class LibraryPanel extends JPanel {
         t.setForeground(Theme.FG_TITLE);
         top.add(t, BorderLayout.WEST);
 
+        // 「分享管理」：服务端已有 /_share/new|drop|list，桌面端也要能用，
+        // 和网页/手机端同一套短链（三端同步）。放在工具栏最左，跟过滤框同一行。
+        JButton shareBtn = Theme.ghost("分享管理");
+        shareBtn.setFont(Theme.ui(12));
+        shareBtn.setToolTipText("生成文件/目录分享短链，或撤销已有分享");
+        shareBtn.addActionListener(e -> {
+            if (baseUrl == null || baseUrl.isEmpty()) {
+                Theme.message(this, "分享管理", "先选中一台服务器");
+                return;
+            }
+            ShareDialog d = new ShareDialog(SwingUtilities.getWindowAncestor(this), baseUrl, cookie);
+            d.setVisible(true);
+        });
+        top.add(shareBtn, BorderLayout.WEST);
+
         filter.setToolTipText("按片名 / 歌手 / 目录过滤");
         Theme.styleInput(filter);
         filter.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {

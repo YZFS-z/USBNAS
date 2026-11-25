@@ -54,6 +54,65 @@ class Player(private val ctx: Context) {
     private var lrc: List<List<Any>> = emptyList()   // [timeMs:Long, text:String]
     private var lastLyricIdx = -2
 
+    /**
+     * 歌词时间轴的人手位移（毫秒）：正数 = 歌词往后推（字幕变慢），负数 = 提前。
+     *
+     * 关键约定：位移只改「按 pos 找哪一行」，**不改音频进度**，也不改已解析的
+     * `[timeMs,text]` 列表本身 —— 所以切歌、刮削重读、浮窗 setLrc 都不受影响，
+     * 一处 nudge 之后播放页大字和桌面歌词浮窗同时生效。
+     *
+     * 落 SharedPreferences（和桌面端 LrcView.offsetMs 一个语义），跨重启保留。
+     */
+    private var lyricOffsetMs: Long = 0L
+    private var prefsLoaded = false
+
+    private fun ensurePrefs() {
+        if (prefsLoaded) return
+        prefsLoaded = true
+        try {
+            lyricOffsetMs = Prefs(ctx).lyricOffsetMs
+        } catch (ignored: Throwable) {
+        }
+    }
+
+    /** 当前位移毫秒；UI 拿来显示 "+0.5s" 这种标签 */
+    fun lyricOffset(): Long {
+        ensurePrefs()
+        return lyricOffsetMs
+    }
+
+    /** 位移 ±ms，返回钳位后的新值。调用方拿它刷标签 */
+    fun nudgeLyric(deltaMs: Int): Long {
+        ensurePrefs()
+        lyricOffsetMs = (lyricOffsetMs + deltaMs).coerceIn(-LYRIC_OFFSET_LIMIT, LYRIC_OFFSET_LIMIT)
+        try {
+            Prefs(ctx).lyricOffsetMs = lyricOffsetMs
+        } catch (ignored: Throwable) {
+        }
+        // 强制下一 tick 重算当前行（否则位移后要等到下一句才变）
+        lastLyricIdx = -2
+        val p = mp
+        if (p != null) {
+            try { emitLyric(p.currentPosition.toLong()) } catch (ignored: Throwable) {}
+        }
+        return lyricOffsetMs
+    }
+
+    fun resetLyricOffset(): Long {
+        ensurePrefs()
+        lyricOffsetMs = 0L
+        try {
+            Prefs(ctx).lyricOffsetMs = 0L
+        } catch (ignored: Throwable) {
+        }
+        lastLyricIdx = -2
+        val p = mp
+        if (p != null) {
+            try { emitLyric(p.currentPosition.toLong()) } catch (ignored: Throwable) {}
+        }
+        return 0L
+    }
+
     private val ui = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor { r ->
         Thread(r, "usbnas-player").apply { isDaemon = true }
@@ -256,10 +315,14 @@ class Player(private val ctx: Context) {
 
     private fun emitLyric(pos: Long) {
         if (lrc.isEmpty()) return
+        // 与桌面端 LrcView 同语义：tick(pos + offsetMs)。
+        // 正数 = 显示「更靠后」的那句（音比词慢时用），负数 = 提前那句。
+        // 音频进度 pos 本身一动不动，只改去时间轴里查哪一行。
+        val at = pos + lyricOffset()
         var idx = -1
         for (i in lrc.indices) {
-            val at = lrc[i][0] as Long
-            if (at <= pos) idx = i else break
+            val stamp = lrc[i][0] as Long
+            if (stamp <= at) idx = i else break
         }
         if (idx == lastLyricIdx) return
         lastLyricIdx = idx
@@ -267,6 +330,9 @@ class Player(private val ctx: Context) {
     }
 
     companion object {
+        /** 歌词位移上限 10s，和桌面端 LrcView.OFFSET_LIMIT 一致 */
+        const val LYRIC_OFFSET_LIMIT = 10_000L
+
         /** LRC → (毫秒, 文本) 列表；与桌面端 LyricWindow.parse 同一套规则 */
         fun parseLrc(raw: String?): List<List<Any>> {
             if (raw.isNullOrEmpty()) return emptyList()

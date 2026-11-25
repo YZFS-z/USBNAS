@@ -82,6 +82,14 @@
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
+        <!-- 分享管理：生成/列出/撤销服务端分享短链，与网页/桌面端同一套 -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="false"
+            android:label="分享管理"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- 内嵌阅读：服务端抽好纯文本，这里只排版 -->
         <activity
             android:name=".BookReaderActivity"

@@ -60,6 +60,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private lateinit var scrapeBtn: Button
     private lateinit var overlayBtn: Button
     private lateinit var lyricTag: TextView
+    /** 歌词位移控制行：提前 / 当前偏移标签 / 延后 / 归零 */
+    private lateinit var offsetRow: LinearLayout
+    private lateinit var offsetLabel: TextView
 
     /** 顶部转圈的黑胶；进度、播放态、歌名都在 Listener 回调里喂给它 */
     private lateinit var disc: DiscView
@@ -225,6 +228,35 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             marginStart = dp(4); marginEnd = dp(4); topMargin = dp(8)
         })
 
+        // 第三排：歌词时间位移。音词对不上时用户自己 ±0.5s 微调，
+        // 和桌面端 PlayerWindow/手机悬浮窗共用同一个 Player.lyricOffsetMs。
+        offsetRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        val earlierBtn = ctlButton(getString(R.string.play_lyric_earlier)) { nudgeLyric(-500) }
+        offsetLabel = TextView(this).apply {
+            setTextColor(Palette.FG2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+            minWidth = dp(72)
+        }
+        val laterBtn = ctlButton(getString(R.string.play_lyric_later)) { nudgeLyric(500) }
+        val resetBtn = ctlButton(getString(R.string.play_lyric_offset_reset)) { nudgeLyric(0, reset = true) }
+        offsetRow.addView(earlierBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+        })
+        offsetRow.addView(offsetLabel, LinearLayout.LayoutParams(0, dp(38), 0.9f).apply {
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+        })
+        offsetRow.addView(laterBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+        })
+        offsetRow.addView(resetBtn, LinearLayout.LayoutParams(0, dp(38), 0.7f).apply {
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+        })
+        updateOffsetLabel()
+
         // 一行状态尾巴：既方便用户看「现在是不是在唱」，也让自动化脚本
         // 能靠这行文字判断播放状态（播放页每 200ms 刷一次，uiautomator 等不到 idle）
         lyricTag = TextView(this).apply {
@@ -271,6 +303,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         hintView = hint
         ctlView = ctl
         toolsView = tools
+        offsetRowView = offsetRow
         isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         attachOrientation(isLandscape)
         portraitRow.visibility = if (isLandscape) View.GONE else View.VISIBLE
@@ -295,11 +328,13 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private var hintView: TextView? = null
     private var ctlView: LinearLayout? = null
     private var toolsView: LinearLayout? = null
+    private var offsetRowView: LinearLayout? = null
 
     private fun attachOrientation(landscape: Boolean) {
         val hint = hintView ?: return
         val ctl = ctlView ?: return
         val tools = toolsView ?: return
+        val offsetRow = offsetRowView ?: return
         val movers = listOf<Pair<android.view.View, LinearLayout.LayoutParams>>(
             disc to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.15f).apply { topMargin = dp(10) },
@@ -315,6 +350,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
             tools to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+            offsetRow to LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
             lyricTag to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         )
@@ -329,7 +366,20 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                     rightCol.addView(v, lp)
                 }
             } else {
-                portraitRow.addView(v, lp)
+                // 竖屏高度只有 2400，disc(1.15) + lyric(1f) 两个权重把剩余空间吃光，
+                // 后面 WRAP_CONTENT 的 offsetRow 会被 AT_MOST 压到 0 高（真机 dump 里
+                // 「歌词提前/延后/归零」整排消失，用户根本点不到）。竖屏这里手动降权，
+                // 并给位移排一个 EXACTLY 的高度，保证它不会被挤掉。
+                val portraitLp = when {
+                    v === disc -> LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply { topMargin = dp(10) }
+                    v === lyric -> LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.8f).apply { topMargin = dp(12) }
+                    v === offsetRow -> LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+                    else -> lp
+                }
+                portraitRow.addView(v, portraitLp)
             }
         }
     }
@@ -417,7 +467,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         } else {
             lp.width = ViewGroup.LayoutParams.MATCH_PARENT
             lp.height = 0
-            lp.weight = 1.15f
+            // 1.15f 时 disc+lyric 把竖屏剩余高度吃光，位移排被压到 0，
+            // 与 attachOrientation 里的 portraitLp 保持一致降到 1.0f
+            lp.weight = 1.0f
         }
         disc.layoutParams = lp
         disc.invalidate()
@@ -577,7 +629,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         }
         timeText.text = fmt(posMs) + " / " + fmt(totalMs)
         disc.setProgress(posMs, totalMs)
-        if (overlayOn) overlay?.tick(posMs)
+        // 浮窗自己按 t<=pos 找行，所以把位移加进喂它的 pos 里，
+        // 才能跟播放页大字（Player.emitLyric 里的 pos+offset）始终同一句。
+        if (overlayOn) overlay?.tick(posMs + player.lyricOffset())
     }
 
     override fun onLyric(text: String?) {
@@ -587,6 +641,22 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     override fun onEnded() {
         playBtn.text = getString(R.string.play_play)
         disc.setSpinning(false)
+    }
+
+    /** 位移按钮：delta 毫秒；reset=true 时归零。改完刷标签，浮窗下一 tick 自动同步。 */
+    private fun nudgeLyric(deltaMs: Int, reset: Boolean = false) {
+        val v = if (reset) player.resetLyricOffset() else player.nudgeLyric(deltaMs)
+        updateOffsetLabel()
+        // Player.nudgeLyric 内部已 lastLyricIdx=-2 并 emitLyric 重取当前行，这里只刷标签
+        if (v == 0L && !reset) toast(getString(R.string.play_lyric_offset, "0.0s"))
+    }
+
+    private fun updateOffsetLabel() {
+        if (!::offsetLabel.isInitialized) return
+        val ms = player.lyricOffset()
+        val sign = if (ms > 0) "+" else if (ms < 0) "−" else ""
+        val sec = String.format(java.util.Locale.US, "%.1f", Math.abs(ms) / 1000f)
+        offsetLabel.text = getString(R.string.play_lyric_offset, sign + sec + "s")
     }
 
     private fun fmt(ms: Long): String {
