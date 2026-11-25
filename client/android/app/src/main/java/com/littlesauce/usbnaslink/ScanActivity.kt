@@ -93,6 +93,9 @@ class ScanActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 用户可能刚去系统设置里开了「安装未知应用」再回来：包还在 cache 里，
+        // 直接续上安装，不要让他重新点一遍「下载并安装」再等几十兆。
+        ApkUpdater.resumePending(this)
         // 首页也要跟服务端对齐配色：用户可能在网页端改过（三端共用一个主题），
         // 回首页时把本地缓存刷新一次；模式真变了才 recreate，否则不动。
         val url = prefs.lastUrl ?: return

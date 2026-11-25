@@ -152,6 +152,22 @@ public final class PhotoLib {
         return Music.audioUrl(baseUrl, filePath);
     }
 
+    /**
+     * 缩略图直链（GET /_photos/thumb?f=&w=）。
+     *
+     * <p>和 {@link #imageUrl} 的区别只有两处：路径进了查询参数、多带一个边长。
+     * 查询参数值走整串 {@code pct} 编码是对的（'/' 编成 %2F 反而必要 ——
+     * 不编码的话服务端 readForm 会把参数值的 '/' 当路径分隔符的一部分，
+     * 而且 '&' 之类的字符会直接把参数截断）。服务端 resolve() 会再解一次码。
+     *
+     * @param px 想要的边长（长边）。服务端封顶 480，超了按 480 算
+     */
+    public static String thumbUrl(String baseUrl, String filePath, int px) {
+        if (baseUrl == null || baseUrl.isEmpty()) return "";
+        if (filePath == null || filePath.isEmpty()) return "";
+        return baseUrl + "/_photos/thumb?f=" + pct(filePath) + "&w=" + px;
+    }
+
     /** 删除结果：deleted 是服务端真删掉的张数，skipped 是被越界/非图片挡下来的 */
     public static final class Deleted {
         public boolean ok;

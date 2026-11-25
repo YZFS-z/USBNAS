@@ -23,7 +23,6 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.net.HttpURLConnection
 import java.net.URL
@@ -76,6 +75,36 @@ class LibraryActivity : AppCompatActivity() {
         const val OP_LEVEL = "level"
         const val OP_KICK = "kick"
         const val OP_DEL = "del"
+
+        /**
+         * 缩略图缓存的字节预算。
+         *
+         * 16MB 是「够填满几屏、又不至于把中端机逼到 OOM」的折中：相册一格
+         * 330×330 的 ARGB_8888 是 435KB，16MB 能留 38 张，加上影视海报
+         * 也在同一个池子里，滑一屏刚好、回滑基本都命中。用字节而不是条数，
+         * 是因为海报（竖版大图）和缩略图（正方形小图）体量差一个数量级。
+         */
+        private const val POSTER_CACHE_BYTES = 16 * 1024 * 1024
+
+        /**
+         * 相册墙一屏先挂多少格。
+         *
+         * 685 张一次全建 = 685 个 FrameLayout + 2055 个子 View，主线程一口气
+         * 排版几分钟；而且其中绝大多数根本不在屏幕上。所以按「批」挂：
+         * 先给一屏半（[PHOTO_PAGE] 张），滚到底部时再追加下一批。
+         * 这个数字不是精确算出来的 —— 3 列 × 约 6 行 ≈ 18 格，
+         * 留一倍余量让首次追加不会立刻触发。
+         */
+        private const val PHOTO_PAGE = 36
+
+        /**
+         * 相册缩略图请求的边长（长边，单位 px）。
+         *
+         * 格子在 1080 宽屏上是 330px，但横屏 2400 宽时能到 700px 上下。
+         * 取 480：竖屏略有余量、横屏也不至于糊成马赛克，单张 JPEG 约 25–40KB。
+         * 服务端 PHOTO_THUMB_MAX 也是 480，两边对齐，超了会被服务端夹回去。
+         */
+        private const val PHOTO_THUMB_PX = 480
     }
 
     private lateinit var prefs: Prefs
@@ -95,6 +124,14 @@ class LibraryActivity : AppCompatActivity() {
     private lateinit var hint: TextView
     private lateinit var spinner: ProgressBar
 
+    /**
+     * 五个页签共用的外层滚动容器。
+     *
+     * 相册的分批挂载（[appendPhotos]）挂在它的滚动回调上：只有这一列滚动时
+     * 才可能触发。别的页签滚到底不会误加图片 —— 回调里用 currentTab 判过。
+     */
+    private lateinit var scroll: ScrollView
+
     /** 三个页签按钮，切页时只刷它们的选中态（不重建视图） */
     private val tabViews = ArrayList<TextView>()
 
@@ -105,7 +142,36 @@ class LibraryActivity : AppCompatActivity() {
 
     /** 正在全屏看的那张图；null 表示没开。关闭时置回 null，避免持有 Dialog 泄漏 */
     private var photoDlg: android.app.Dialog? = null
-    private val posterCache = HashMap<String, Bitmap?>()
+
+    /**
+     * 缩略图与海报的位图缓存，按<b>字节数</b>做 LRU 淘汰。
+     *
+     * 原来是 `HashMap<String, Bitmap?>`，只加不减、连失败（null）也缓存。
+     * 相册 685 张、每张几十万像素的位图全留着，滑到一半就 OOM；而失败的那些
+     * 又会永久停在「空图」状态，网络恢复也不重试。两个毛病一起治：
+     *   - 换成 LruCache，超预算丢最久没用的那张；
+     *   - 失败的不进缓存（见 [posterLoading]），下次重建视图还能再试一次。
+     */
+    private val posterCache = object : android.util.LruCache<String, Bitmap>(POSTER_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
+
+    /**
+     * 正在下载中的缩略图 key。
+     *
+     * 同一张图可能被两个视图先后要求（滑出屏幕再滑回来），没有这个集合就会
+     * 同时排两次队。用完即删 —— 它只防「同一时刻重复」，不防「失败后重试」。
+     */
+    private val posterLoading = HashSet<String>()
+
+    /**
+     * 还在路上的清单请求。
+     *
+     * 影/音/书三条腿各跑各的（见 [reload]），全靠它判断「最后一个回来了没」——
+     * 集合空了才关转圈。用可变集合是因为每个腿在自己的线程里收尾，
+     * 只在 `ui.post` 里改，天然串行。
+     */
+    private val pending = LinkedHashSet<Int>()
 
     private var currentTab = 0
 
@@ -121,6 +187,20 @@ class LibraryActivity : AppCompatActivity() {
      * 页面里最扎眼的一处不统一。
      */
     private val TAB_WEB = 5
+
+    private val TAB_VIDEO = 0
+    private val TAB_MUSIC = 1
+    private val TAB_BOOK = 2
+    private val TAB_PHOTO = 3
+
+    /**
+     * 单页清单请求的超时。
+     *
+     * 45 秒看着夸张，但服务端首次扫 1197 首音乐确实要 18 秒（fuse 元数据 + 逐个
+     * 读 id3）。原来的 15 秒比这个数字还小，等于「第一次打开音乐必然超时」。
+     * 超时又长又不碍事的理由是：三条腿已经拆开并行，慢的那条不拖快的那条。
+     */
+    private val LOAD_TIMEOUT_MS = 45000
 
     /** 音乐页当前视图：0 平铺 / 1 按歌手 / 2 按专辑（与桌面端同一套档位） */
     private var musicView = 0
@@ -264,7 +344,7 @@ class LibraryActivity : AppCompatActivity() {
         }
         root.addView(hint)
 
-        val scroll = ScrollView(this)
+        scroll = ScrollView(this)
         val host = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(24))
@@ -281,6 +361,16 @@ class LibraryActivity : AppCompatActivity() {
         host.addView(manageHost)
         scroll.addView(host)
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        // 相册滚到快见底时继续挂下一批格子。
+        // 阈值取「距底 1.5 屏」而不是「到底」：手指还在滑的时候就要有内容，
+        // 等真到底才建 View 会看到一段空白。另外这里必须用剩余量判断，
+        // 不能用 scrollY 和内容高度直接比 —— 内容高度每追加一批就变一次。
+        scroll.setOnScrollChangeListener { _, _, top, _, _ ->
+            if (currentTab != TAB_PHOTO || photosDone) return@setOnScrollChangeListener
+            val content = scroll.getChildAt(0)?.height ?: return@setOnScrollChangeListener
+            if (content - (top + scroll.height) < scroll.height * 1.5f) appendPhotos(PHOTO_PAGE)
+        }
 
         setContentView(root)
         // 状态栏/手势栏透明，看到的永远是 root 的 #0F141A（详见 Immersive.tintBars）
@@ -313,6 +403,29 @@ class LibraryActivity : AppCompatActivity() {
         if (idx == 3 && photoHost.childCount == 0) {
             loadPhotos()
         }
+        // 影/音/书同理：冷启动只拉当前那页（见 reload），点过来时才补。
+        // 空着是因为「还没要」而不是「没有」，所以先给一句正在加载，
+        // 免得用户看到「还没有影视」以为库是空的。
+        if (idx != 4 && idx != 3 && idx != TAB_WEB) {
+            val loaded = when (idx) {
+                TAB_VIDEO -> vlib != null
+                TAB_MUSIC -> mlib != null
+                TAB_BOOK -> blib != null
+                else -> true
+            }
+            if (!loaded) {
+                val host = when (idx) {
+                    TAB_VIDEO -> videoHost
+                    TAB_MUSIC -> musicHost
+                    else -> bookHost
+                }
+                if (host.childCount == 0) {
+                    host.removeAllViews()
+                    host.addView(msg(getString(R.string.common_loading)))
+                }
+                ensureLoaded(idx)
+            }
+        }
         for ((i, t) in tabViews.withIndex()) {
             // 「网页」页签永远不标选中：它不是一页内容，点完就跳浏览器再回来，
             // 给它可以留下一个假的选中态会让用户以为停在了某个「网页页」上。
@@ -329,16 +442,19 @@ class LibraryActivity : AppCompatActivity() {
         hint.text = when {
             // 设置页不显示媒体统计：那一行的句式和「影视 N 部」完全不同族
             currentTab == TAB_MANAGE -> getString(R.string.lib_hint_manage)
-            currentTab == 3 -> {
+            currentTab == TAB_PHOTO -> {
                 if (p == null) getString(R.string.lib_photo_loading)
                 else getString(R.string.lib_hint_photo, p.photos.size, p.albumCount())
             }
+            // 三个库现在是各拉各的，当前页那份还没回来就报「正在加载」。
+            // 早先这里是「三个都 null 才算加载中」，并行之后必然会有
+            // 「影视已回来、音乐还在路上」的中间态，按当前页判断才准。
+            currentTab == TAB_VIDEO && v == null -> getString(R.string.common_loading)
+            currentTab == TAB_MUSIC && m == null -> getString(R.string.common_loading)
+            currentTab == TAB_BOOK && b == null -> getString(R.string.common_loading)
             v == null && m == null && b == null -> getString(R.string.common_loading)
-            currentTab == 0 -> {
-                val groups = v?.groups?.size ?: 0
-                getString(R.string.lib_hint_video, v?.videos?.size ?: 0, groups)
-            }
-            currentTab == 1 -> {
+            currentTab == TAB_VIDEO -> getString(R.string.lib_hint_video, v?.videos?.size ?: 0, v?.groups?.size ?: 0)
+            currentTab == TAB_MUSIC -> {
                 val base = getString(R.string.lib_hint_music, m?.tracks?.size ?: 0, m?.dirs?.size ?: 0)
                 when (musicView) {
                     1 -> getString(R.string.lib_hint_music_artist, base)
@@ -350,25 +466,94 @@ class LibraryActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 拉影/音/书三份清单。
+     *
+     * 早先是「一个 post 里依次 fetch 三份，全都回来才统一 build」。问题在于：
+     * 服务端音乐首次扫描要 18 秒（1197 首走 fuse 读元数据），而三份是串行
+     * 排队的，于是影视清单明明 0.02 秒就好了，却要陪音乐一起等 18 秒；客户端
+     * 那边 15000ms 超时先到，`m.ok=false`，界面就只剩「还没有音乐」。用户看到
+     * 的「有时加载不出来」就是这么来的 —— 不是没扫到，是等超时了。
+     *
+     * 现在改成三条腿各自独立：谁先回来谁先上屏，互不阻塞。超时也拉长到 45s，
+     * 让服务端首扫能跑完；真超时了也只影响它自己那一页。
+     *
+     * 另外只拉当前页 + 已建过视图的页：冷启动落在影视页时不该为音乐/图书付钱，
+     * 用户点过去时 [ensureLoaded] 再补，页面当场变「正在加载…」而不是空。
+     */
     private fun reload() {
         spinner.visibility = View.VISIBLE
+        pending.clear()
+        if (currentTab == 0) pending.add(TAB_VIDEO)
+        if (currentTab == 1) pending.add(TAB_MUSIC)
+        if (currentTab == 2) pending.add(TAB_BOOK)
+        if (pending.isEmpty()) {
+            // 落在设置/相册页时不预取：用户还没要看，别替他决定要不要扫一万首
+            spinner.visibility = View.GONE
+            updateHint()
+            return
+        }
+        for (tab in pending.toList()) fetchTab(tab)
+    }
+
+    /** 某一页还没数据就现在去拉；已经拉过的不重复。 */
+    private fun ensureLoaded(tab: Int) {
+        val done = when (tab) {
+            TAB_VIDEO -> vlib != null
+            TAB_MUSIC -> mlib != null
+            TAB_BOOK -> blib != null
+            TAB_PHOTO -> plib != null
+            else -> true
+        }
+        if (done) return
+        if (tab == TAB_PHOTO) {
+            loadPhotos()
+            return
+        }
+        pending.add(tab)
+        fetchTab(tab)
+    }
+
+    /** 收尾：最后一个在途请求回来时关掉转圈。 */
+    private fun settle(tab: Int) {
+        pending.remove(tab)
+        if (pending.isEmpty()) spinner.visibility = View.GONE
+        updateHint()
+    }
+
+    /** 单页拉取。每条腿自己起线程、自己上屏、自己收尾。 */
+    private fun fetchTab(tab: Int) {
         val base = baseUrl
         val ck = sid
+        spinner.visibility = View.VISIBLE
         post {
-            val v = VideoLib.fetch(base, ck, null, 15000)
-            val m = Music.fetch(base, ck, 15000)
-            val b = BookLib.fetch(base, ck, null, 15000)
-            ui.post {
-                spinner.visibility = View.GONE
-                vlib = v
-                mlib = m
-                blib = b
-                buildVideos()
-                buildMusic()
-                buildBooks()
-                updateHint()
-                if (!v.ok && !m.ok && !b.ok) {
-                    hint.text = getString(R.string.lib_all_failed, v.error ?: m.error ?: b.error ?: "")
+            when (tab) {
+                TAB_VIDEO -> {
+                    val v = VideoLib.fetch(base, ck, null, LOAD_TIMEOUT_MS)
+                    ui.post {
+                        vlib = v
+                        if (currentTab == TAB_VIDEO || videoHost.childCount > 0) buildVideos()
+                        settle(tab)
+                        if (!v.ok) toast(getString(R.string.lib_all_failed, v.error ?: ""))
+                    }
+                }
+                TAB_MUSIC -> {
+                    val m = Music.fetch(base, ck, LOAD_TIMEOUT_MS)
+                    ui.post {
+                        mlib = m
+                        if (currentTab == TAB_MUSIC || musicHost.childCount > 0) buildMusic()
+                        settle(tab)
+                        if (!m.ok) toast(getString(R.string.lib_all_failed, m.error ?: ""))
+                    }
+                }
+                TAB_BOOK -> {
+                    val b = BookLib.fetch(base, ck, null, LOAD_TIMEOUT_MS)
+                    ui.post {
+                        blib = b
+                        if (currentTab == TAB_BOOK || bookHost.childCount > 0) buildBooks()
+                        settle(tab)
+                        if (!b.ok) toast(getString(R.string.lib_all_failed, b.error ?: ""))
+                    }
                 }
             }
         }
@@ -464,7 +649,8 @@ class LibraryActivity : AppCompatActivity() {
     }
 
     private fun loadPoster(v: Video, img: ImageView) {
-        val cached = posterCache[v.path]
+        val key = v.path ?: return
+        val cached = posterCache.get(key)
         if (cached != null) {
             img.setImageBitmap(cached)
             return
@@ -472,14 +658,21 @@ class LibraryActivity : AppCompatActivity() {
         val base = baseUrl
         val ck = sid
         post {
-            val meta = VideoLib.fetchMeta(base, ck, v.path, 12000)
+            val meta = VideoLib.fetchMeta(base, ck, key, 12000)
             val poster = meta?.posterUrl
-            val bmp = if (poster.isNullOrEmpty())
-                null else fetchImage(VideoLib.artUrl(base, poster), ck)
+            if (poster.isNullOrEmpty()) {
+                // 没有海报也是一条结论，直接给占位图，别让格子里一直空着
+                ui.post { img.setImageResource(android.R.drawable.ic_media_play) }
+                return@post
+            }
+            val bmp = fetchImage(VideoLib.artUrl(base, poster), ck)
             ui.post {
-                posterCache[v.path] = bmp
-                if (bmp != null) img.setImageBitmap(bmp)
-                else img.setImageResource(android.R.drawable.ic_media_play)
+                if (bmp != null) {
+                    posterCache.put(key, bmp)
+                    img.setImageBitmap(bmp)
+                } else {
+                    img.setImageResource(android.R.drawable.ic_media_play)
+                }
             }
         }
     }
@@ -801,7 +994,10 @@ class LibraryActivity : AppCompatActivity() {
         val base = baseUrl
         val ck = sid
         post {
-            val lib = PhotoLib.fetch(base, ck, null, 15000)
+            // 超时跟影视/音乐/图书统一走 LOAD_TIMEOUT_MS：相册清单本身很快，
+            // 但它和另外三条腿共用一个线程池，慢的时候是被别人挤的，
+            // 给 15 秒会在这时候误报「加载失败」。
+            val lib = PhotoLib.fetch(base, ck, null, LOAD_TIMEOUT_MS)
             ui.post {
                 plib = lib
                 buildPhotos()
@@ -815,10 +1011,22 @@ class LibraryActivity : AppCompatActivity() {
      *
      * 为什么不和影视一样一个卡片一行：图的价值就在「一眼看到很多」，
      * 一行一张会把 100 张图变成 100 屏。
+     *
+     * <p><b>分批挂载</b>：这里只把清单排成「计划」（[photoPlan]），
+     * 真正建 View 的活交给 [appendPhotos]，一次 [PHOTO_PAGE] 格。
+     * 原来是双层 for 一口气建完 —— 685 张图 = 685 个 FrameLayout +
+     * 2055 个子 View + 685 次布局，全在主线程，滚轮还没摸到就先卡几秒。
+     * 现在滚到快到底才继续追加，代价是首次看到的那一屏还是同一个流程，
+     * 但后面几百格的开销摊到了滚动过程里。
      */
     private fun buildPhotos() {
         photoHost.removeAllViews()
         photoCellRefs.clear()
+        photoPlan = emptyList()
+        planAlbum = 0
+        planIndex = 0
+        planRow = null
+        photosDone = false
         val lib = plib
         if (lib == null) {
             photoHost.addView(msg("…"))
@@ -849,37 +1057,85 @@ class LibraryActivity : AppCompatActivity() {
         for (p in lib.photos) {
             albums.getOrPut(p.dir ?: "") { ArrayList() }.add(p)
         }
-        for ((dir, list) in albums) {
-            photoHost.addView(sectionHeader(folderName(dir), getString(R.string.lib_group_photos, list.size), dir))
-            // 三列网格：每行一个横向 LinearLayout，装 3 个等宽格子
-            var row: LinearLayout? = null
-            for ((i, p) in list.withIndex()) {
-                if (i % PHOTO_COLS == 0) {
-                    row = LinearLayout(this).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        setPadding(0, 0, 0, 0)
-                    }
-                    photoHost.addView(row, LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                }
-                val cell = photoCard(p)
-                row!!.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    // 留出 6dp 缝，靠右/下补在容器上；最后一列不多留
-                    rightMargin = if (i % PHOTO_COLS == PHOTO_COLS - 1) 0 else dp(6)
-                    bottomMargin = dp(6)
-                    if (i % PHOTO_COLS == 0) leftMargin = dp(14)
-                })
+        photoPlan = albums.map { it.key to it.value }
+        appendPhotos(PHOTO_PAGE)
+    }
+
+    /** 分批挂载的游标：当前在第几个相册、该相册的第几张、当前那一行 */
+    private var photoPlan: List<Pair<String, List<Photo>>> = emptyList()
+    private var planAlbum = 0
+    private var planIndex = 0
+    private var planRow: LinearLayout? = null
+
+    /** 全部格子挂完了没。挂完就不再响应滚动追加，免得重复加总结行 */
+    private var photosDone = false
+
+    /**
+     * 接着往下挂最多 [limit] 个格子。
+     *
+     * 行是「攒满 3 个才 add 一次」以外的另一条路：每 3 格新建一个横向
+     * LinearLayout 并立刻 add 到 photoHost（行本身是空的也算一次排版），
+     * 所以 limit 按「格」算而不是按「行」算 —— 调用方关心的是数量，
+     * 3 列只是排版细节。
+     */
+    private fun appendPhotos(limit: Int) {
+        if (photosDone) return
+        var added = 0
+        while (added < limit) {
+            if (planAlbum >= photoPlan.size) {
+                finishPhotos()
+                return
             }
-            // 补满最后一行：不足 3 个时塞透明占位，避免剩下的格子被拉宽
-            val rest = list.size % PHOTO_COLS
-            if (rest != 0) {
-                for (k in rest until PHOTO_COLS) {
-                    row!!.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f).apply {
-                        rightMargin = if (k == PHOTO_COLS - 1) 0 else dp(6)
-                    })
-                }
+            val dir = photoPlan[planAlbum].first
+            val list = photoPlan[planAlbum].second
+            if (planIndex == 0) {
+                photoHost.addView(sectionHeader(folderName(dir),
+                    getString(R.string.lib_group_photos, list.size), dir))
             }
+            if (planIndex >= list.size) {
+                flushPlanRow(list.size)
+                planAlbum++
+                planIndex = 0
+                planRow = null
+                continue
+            }
+            if (planIndex % PHOTO_COLS == 0) {
+                planRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, 0, 0, 0)
+                }
+                photoHost.addView(planRow, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            val cell = photoCard(list[planIndex])
+            planRow!!.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                // 留出 6dp 缝，靠右/下补在容器上；最后一列不多留
+                rightMargin = if (planIndex % PHOTO_COLS == PHOTO_COLS - 1) 0 else dp(6)
+                bottomMargin = dp(6)
+                if (planIndex % PHOTO_COLS == 0) leftMargin = dp(14)
+            })
+            planIndex++
+            added++
         }
+    }
+
+    /** 补满刚才那一行：不足 3 个时塞透明占位，避免剩下的格子被拉宽 */
+    private fun flushPlanRow(total: Int) {
+        val row = planRow ?: return
+        val rest = total % PHOTO_COLS
+        if (rest == 0) return
+        for (k in rest until PHOTO_COLS) {
+            row.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f).apply {
+                rightMargin = if (k == PHOTO_COLS - 1) 0 else dp(6)
+            })
+        }
+    }
+
+    /** 收尾：总结行 + 多选工具条的初始状态 */
+    private fun finishPhotos() {
+        if (photosDone) return
+        photosDone = true
+        val lib = plib ?: return
         photoHost.addView(TextView(this).apply {
             text = getString(R.string.lib_photos_summary, lib.photos.size, lib.albumCount())
             setTextColor(Palette.FAINT)
@@ -977,14 +1233,22 @@ class LibraryActivity : AppCompatActivity() {
     private fun confirmDeletePhotos() {
         val picks = photoSel.toList()
         if (picks.isEmpty()) return
-        val dlg = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.lib_del_confirm_title, picks.size))
-            .setMessage(getString(R.string.lib_del_confirm_msg))
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .setPositiveButton(getString(R.string.common_delete)) { _, _ -> doDeletePhotos(picks) }
-            .create()
-        dlg.show()
-        dlg.getButton(android.content.DialogInterface.BUTTON_POSITIVE)?.setTextColor(Palette.WARN_HI)
+        val dlg = Palette.dialog(
+            this,
+            getString(R.string.lib_del_confirm_title, picks.size),
+            Palette.dialogText(this, getString(R.string.lib_del_confirm_msg)),
+            listOf(
+                Palette.outline(this, getString(R.string.common_cancel)).apply {
+                    setOnClickListener { dlgRef?.dismiss() }
+                },
+                // 批量删图同样是不可逆动作，走警示色
+                Palette.outline(this, getString(R.string.common_delete), Palette.WARN_HI).apply {
+                    setOnClickListener {
+                        dlgRef?.dismiss()
+                        doDeletePhotos(picks)
+                    }
+                }))
+        dlgRef = dlg
     }
 
     private fun doDeletePhotos(picks: List<String>) {
@@ -1096,25 +1360,44 @@ class LibraryActivity : AppCompatActivity() {
             badge.setBackgroundColor(Palette.ACCENT)
         }
 
-        // 缩略图走 /music 同一个服务（Music.audioUrl 按段编码路径）
-        val url = PhotoLib.imageUrl(baseUrl, p.path)
-        val ck = sid
-        val key = "p:" + p.path
-        val hit = posterCache[key]
+        // 缩略图走 /_photos/thumb：服务端按目标边长降采样后再 JPEG 编码，
+        // 一张 1.9MB 的原图变成 20KB 左右。以前直连原图 —— 685 张就是 1.3GB
+        // 传输 + 每张 48MB 的 ARGB_8888 解码，卡顿与 OOM 都从那儿来。
+        val url = PhotoLib.thumbUrl(baseUrl, p.path, PHOTO_THUMB_PX)
+        posterInto(img, "p:" + p.path, url, sid)
+        return box
+    }
+
+    /**
+     * 把一张图异步贴进 ImageView：命中缓存立刻贴，未命中排队下载。
+     *
+     * 抽出来是因为影视海报和相册缩略图的逻辑完全一样，之前是两份拷贝
+     * （一份在 [loadPoster]、一份在 [photoCard]），缓存策略一改就要改两处。
+     *
+     * <p>{@code key} 必须能把「同一张图的不同用途」分开：相册缩略图用
+     * {@code "p:"} 前缀，影视海报直接用视频路径 —— 两者不会撞。
+     */
+    private fun posterInto(img: ImageView, key: String, url: String, ck: String?) {
+        val hit = posterCache.get(key)
         if (hit != null) {
             img.setImageBitmap(hit)
-        } else {
-            img.setImageBitmap(null)
-            post {
-                val bmp = fetchImage(url, ck)
-                ui.post {
-                    posterCache[key] = bmp
-                    // 视图可能已经被回收重建，setTag 记的路径还在才贴
-                    if (bmp != null && box.isAttachedToWindow) img.setImageBitmap(bmp)
-                }
+            return
+        }
+        img.setImageBitmap(null)
+        // 同一张图只排一次队。滑出去再滑回来会重复请求，而 io 池只有 3 个线程，
+        // 重复排队等于把真正的进度往后压。
+        val fresh = synchronized(posterLoading) { posterLoading.add(key) }
+        if (!fresh) return
+        post {
+            val bmp = fetchImage(url, ck)
+            ui.post {
+                synchronized(posterLoading) { posterLoading.remove(key) }
+                // 成功才进缓存：失败（网络断了、服务端还在扫）留个空，
+                // 下次重建视图会重新请求，而不是永远显示空白。
+                if (bmp != null) posterCache.put(key, bmp)
+                if (bmp != null && img.isAttachedToWindow) img.setImageBitmap(bmp)
             }
         }
-        return box
     }
 
     /**
@@ -1299,21 +1582,49 @@ class LibraryActivity : AppCompatActivity() {
         }
     }
 
-    /** 列表用的缩略图：解码时按目标尺寸降采样，否则 4000 张原图会瞬间 OOM */
+    /**
+     * 列表用的缩略图解码。
+     *
+     * 正常情况下拿到的已经是服务端压好的小图（[PhotoLib.thumbUrl]），直接解就行。
+     * 但仍按目标边长做一次降采样兜底，为的是两种场景：
+     *   - 服务端还是旧版本（没有 /_photos/thumb，落到原图那条路）；
+     *   - 影视海报走的是 /art 直链，那个端点是原图，没人替我们缩。
+     * 没有这一层，一张 4000×3000 的海报就是 48MB —— 滑两张就 OOM。
+     */
     private fun fetchImage(url: String, ck: String?): Bitmap? {
         var c: HttpURLConnection? = null
         return try {
-            c = URL(url).openConnection() as HttpURLConnection
-            c.connectTimeout = 6000
-            c.readTimeout = 12000
-            c.setRequestProperty("User-Agent", "USBNASLink/1.0")
-            if (!ck.isNullOrEmpty()) c.setRequestProperty("Cookie", "${Session.COOKIE}=$ck")
-            c.inputStream.use { BitmapFactory.decodeStream(it) }
+            // 第一趟只要头：拿到真实尺寸才能算出正确的 inSampleSize。
+            // inJustDecodeBounds 不分配像素内存，代价接近零。
+            c = openImage(url, ck)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            c.inputStream.use { BitmapFactory.decodeStream(it, null, bounds) }
+            c.disconnect()
+
+            var sample = 1
+            val longSide = maxOf(bounds.outWidth, bounds.outHeight)
+            // 每翻一倍，像素数降 4 倍；留 2 倍余量给不同 dpi 的屏幕
+            while (longSide / (sample * 2) >= PHOTO_THUMB_PX * 2) sample *= 2
+
+            // 第二趟真解。注意这里要重新连 —— HttpURLConnection 的流读完了，
+            // 同一个连接不能再要第二次。
+            c = openImage(url, ck)
+            val opt = BitmapFactory.Options().apply { inSampleSize = sample }
+            c.inputStream.use { BitmapFactory.decodeStream(it, null, opt) }
         } catch (e: Throwable) {
             null
         } finally {
             c?.disconnect()
         }
+    }
+
+    private fun openImage(url: String, ck: String?): HttpURLConnection {
+        val hc = URL(url).openConnection() as HttpURLConnection
+        hc.connectTimeout = 8000
+        hc.readTimeout = 20000
+        hc.setRequestProperty("User-Agent", "USBNASLink/1.0")
+        if (!ck.isNullOrEmpty()) hc.setRequestProperty("Cookie", "${Session.COOKIE}=$ck")
+        return hc
     }
 
     /** 全屏查看用的解码：先量尺寸，再按 2048 上限降采样，兼顾清晰与内存 */
@@ -1394,6 +1705,9 @@ class LibraryActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 「管理设置」里的自动更新也可能走到「去开安装权限」那一步，
+        // 从系统设置回来时在这里把留着没装的包装掉（没留包时是个空调用）。
+        ApkUpdater.resumePending(this)
         // 只在「管理设置」页签可见时才刷新：其它页签刷新没必要，还会多打一次请求。
         // 注意这里要先从 Prefs 里把 sid 读回来 —— 用户在网页端登录成功后，
         // BrowseActivity.onPageFinished 会把服务端新发的 sid 写进 Prefs，
@@ -1728,65 +2042,102 @@ class LibraryActivity : AppCompatActivity() {
 
     private fun pickLevel(a: Admin.Account) {
         // 列表顺序与等级值同向：0 只读 / 1 读写 / 2 管理员。
-        // 之前这里写成 lv = 2 - which，而 setSingleChoiceItems 的预选位置传的又是 cur，
+        // 之前这里写成 lv = 2 - which，而预选位置传的又是 cur，
         // 两边方向相反 —— 点第一项「只读」实际把人变成了管理员。
         val opts = levelNames()
         val cur = a.level.coerceIn(0, 2)
-        android.app.AlertDialog.Builder(this)
-            .setTitle(getString(R.string.set_level_title, a.name ?: "?"))
-            // List 重载只在 API 21+ 有且要 ListAdapter；这里传 Array<CharSequence> 走
-            // 一直是 public 的那个重载，省得跟混淆/新旧 SDK 过不去
-            .setSingleChoiceItems(opts.toTypedArray(), cur) { d, which ->
-                d.dismiss()
-                if (which == a.level) return@setSingleChoiceItems
-                accountOp(OP_LEVEL, a.name ?: "", "", which)
-            }
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .show()
+        val col = Palette.dialogChoices(this, opts, cur) { which ->
+            if (which != a.level) accountOp(OP_LEVEL, a.name ?: "", "", which)
+        }
+        val dlg = Palette.dialog(
+            this,
+            getString(R.string.set_level_title, a.name ?: "?"),
+            col,
+            listOf(Palette.outline(this, getString(R.string.common_cancel)).apply {
+                setOnClickListener { dlgRef?.dismiss() }
+            }))
+        // 选项行要拿到窗口句柄才能自己关掉自己：`dialog()` 是先 show 后返回，
+        // 而 `dialogChoices` 在构造期就要闭包，所以把句柄挂在 tag 上传递。
+        // 这样点选项 = 选了就关，点「取消」= 只关不选，跟系统那套行为一致。
+        dlgRef = dlg
+        for (i in 0 until col.childCount) col.getChildAt(i).tag = dlg
     }
 
+    /** 当前打开的账号对话框。同一时刻只留一个，避免叠窗。 */
+    private var dlgRef: android.app.Dialog? = null
+
     private fun askPassword(a: Admin.Account) {
-        val input = Palette.field(this, getString(R.string.set_new_pw)).apply { setInputType(
-            android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) }
-        // 用 setView(view, l, t, r, b) 的五参重载在 Kotlin 里解析不到
-        // （Builder 只有 setView(View) 和 setView(Int)），自己套一层带内边距的 FrameLayout
-        val holder = android.widget.FrameLayout(this).apply {
-            setPadding(dp(20), dp(8), dp(20), 0)
-            addView(input, android.widget.FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
+        val input = Palette.field(this, getString(R.string.set_new_pw)).apply {
+            setInputType(android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD)
         }
-        android.app.AlertDialog.Builder(this)
-            .setTitle(getString(R.string.set_pw_title, a.name ?: "?"))
-            .setMessage(getString(R.string.set_pw_msg))
-            .setView(holder)
-            .setPositiveButton(getString(R.string.set_pw_do)) { _, _ ->
-                val p = input.text.toString()
-                if (p.isEmpty()) {
-                    toast(getString(R.string.set_pw_empty))
-                } else {
-                    accountOp(OP_PW, a.name, p, a.level)
-                }
-            }
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .show()
+        // 输入框在自绘对话框里不再需要套 FrameLayout 撑内边距：`dialog()` 的
+        // box 自己带 20dp 左右留白，直接当 body 塞进去就是对齐的。
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        body.addView(Palette.dialogText(this, getString(R.string.set_pw_msg)))
+        body.addView(input, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(10) })
+
+        val dlg = Palette.dialog(
+            this,
+            getString(R.string.set_pw_title, a.name ?: "?"),
+            body,
+            listOf(
+                Palette.outline(this, getString(R.string.common_cancel)).apply {
+                    setOnClickListener { dlgRef?.dismiss() }
+                },
+                Palette.solid(this, getString(R.string.set_pw_do)).apply {
+                    setOnClickListener {
+                        val p = input.text.toString()
+                        if (p.isEmpty()) {
+                            toast(getString(R.string.set_pw_empty))
+                        } else {
+                            dlgRef?.dismiss()
+                            accountOp(OP_PW, a.name, p, a.level)
+                        }
+                    }
+                }))
+        dlgRef = dlg
     }
 
     private fun confirmKick(a: Admin.Account) {
-        android.app.AlertDialog.Builder(this)
-            .setTitle(getString(R.string.set_kick_title, a.name ?: "?"))
-            .setMessage(getString(R.string.set_kick_msg, a.online))
-            .setPositiveButton(getString(R.string.set_kick)) { _, _ -> accountOp(OP_KICK, a.name, "", a.level) }
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .show()
+        val dlg = Palette.dialog(
+            this,
+            getString(R.string.set_kick_title, a.name ?: "?"),
+            Palette.dialogText(this, getString(R.string.set_kick_msg, a.online)),
+            listOf(
+                Palette.outline(this, getString(R.string.common_cancel)).apply {
+                    setOnClickListener { dlgRef?.dismiss() }
+                },
+                Palette.solid(this, getString(R.string.set_kick)).apply {
+                    setOnClickListener {
+                        dlgRef?.dismiss()
+                        accountOp(OP_KICK, a.name, "", a.level)
+                    }
+                }))
+        dlgRef = dlg
     }
 
     private fun confirmDelete(a: Admin.Account) {
-        android.app.AlertDialog.Builder(this)
-            .setTitle(getString(R.string.set_del_title, a.name ?: "?"))
-            .setMessage(getString(R.string.set_del_msg))
-            .setPositiveButton(getString(R.string.common_delete)) { _, _ -> accountOp(OP_DEL, a.name, "", a.level) }
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .show()
+        val dlg = Palette.dialog(
+            this,
+            getString(R.string.set_del_title, a.name ?: "?"),
+            Palette.dialogText(this, getString(R.string.set_del_msg)),
+            listOf(
+                Palette.outline(this, getString(R.string.common_cancel)).apply {
+                    setOnClickListener { dlgRef?.dismiss() }
+                },
+                // 删除是不可逆动作，主按钮走警示色而不是主色，跟账号卡片上
+                // 那颗「删除」描边按钮同色，两处指向同一件事。
+                Palette.outline(this, getString(R.string.common_delete), Palette.WARN_HI).apply {
+                    setOnClickListener {
+                        dlgRef?.dismiss()
+                        accountOp(OP_DEL, a.name, "", a.level)
+                    }
+                }))
+        dlgRef = dlg
     }
 
     /** 四个账号动作统一走这里：后台请求 → toast → 重新拉一遍清单 */

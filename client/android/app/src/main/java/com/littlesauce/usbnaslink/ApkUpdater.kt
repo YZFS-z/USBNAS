@@ -158,8 +158,14 @@ object ApkUpdater {
                     setLineSpacing(dp(activity, 3).toFloat(), 1f)
                 })
             }
+            // 说明区高度不能写死 260dp：横屏只有 1080px 高，减去标题、版本行、
+            // 提示语和三颗按钮之后 260dp 的说明块会把按钮行顶出屏幕 ——
+            // 弹窗是 WRAP_CONTENT，超出的部分是直接看不见，不是滚动。
+            // 按屏高取 30%，上限仍是 260dp。
+            val noteH = minOf(dp(activity, 260),
+                (activity.resources.displayMetrics.heightPixels * 0.30f).toInt())
             wrap.addView(sv, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 260)).apply {
+                ViewGroup.LayoutParams.MATCH_PARENT, noteH).apply {
                 topMargin = dp(activity, 12)
             })
         }
@@ -319,7 +325,11 @@ object ApkUpdater {
                         }
                     }
                 }
-                if (!ok) throw java.io.IOException(activity.getString(R.string.upd_incomplete))
+                if (!ok) {
+                    val why = Update.lastError()
+                    throw java.io.IOException(
+                        if (why.isEmpty()) activity.getString(R.string.upd_incomplete) else why)
+                }
             } catch (t: Throwable) {
                 err = Update.describeForUser(t)
             }
@@ -335,14 +345,33 @@ object ApkUpdater {
         }.apply { isDaemon = true }.start()
     }
 
+    /** 权限没开时先把包留住，等用户从系统设置回来接着装，不用重下几十兆 */
+    private var pendingApk: File? = null
+    private var pendingVer: String = ""
+
     /**
-     * 交给系统安装器。
+     * 交给系统安装器。**先问系统有没有给这个 App 装软件的权利。**
      *
-     * 这里必须用 FileProvider：直接给 file:// 会在 Android 7+ 抛
-     * FileUriExposedException；而 content:// 需要在 Manifest 里声明 provider，
-     * 见 {@code res/xml/file_paths.xml}。
+     * Android 8.0 起，「装未知来源的 APK」从系统全局开关变成了逐 App 授权
+     * （`REQUEST_INSTALL_PACKAGES`）。没授权时 `startActivity(ACTION_VIEW)`
+     * 不会抛异常，是被系统**静默丢弃** —— 用户那边看到的就是下载跑到 100%
+     * 然后什么都没有，连个报错都没有。这个坑在真机上排查了很久，所以判定
+     * 一定要放在 `startActivity` 之前，并且给一条能走通的路，而不是 toast 一句。
      */
     private fun install(activity: Activity, apk: File, version: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !activity.packageManager.canRequestPackageInstalls()
+        ) {
+            pendingApk = apk
+            pendingVer = version
+            askInstallPermission(activity)
+            return
+        }
+        launchInstaller(activity, apk, version)
+    }
+
+    /** 真正的「交给安装器」那一步，权限确认之后才走这里 */
+    private fun launchInstaller(activity: Activity, apk: File, version: String) {
         try {
             val uri: Uri = FileProvider.getUriForFile(activity, AUTHORITY, apk)
             val i = Intent(Intent.ACTION_VIEW).apply {
@@ -356,6 +385,43 @@ object ApkUpdater {
             // 有些壳（比如没装安装器组件的定制 ROM）会在这里抛 ActivityNotFoundException
             toast(activity, activity.getString(R.string.upd_no_installer, t.javaClass.simpleName, apk.absolutePath))
         }
+    }
+
+    /** 解释为什么装不了，并把人送到「安装未知应用」那一页 */
+    private fun askInstallPermission(activity: Activity) {
+        if (activity.isFinishing) return
+        lateinit var dlg: android.app.Dialog
+        val bCancel = Palette.outline(activity, activity.getString(R.string.common_cancel))
+        val bGo = Palette.solid(activity, activity.getString(R.string.upd_perm_go))
+        dlg = Palette.dialog(
+            activity,
+            activity.getString(R.string.upd_perm_title),
+            Palette.dialogText(activity, activity.getString(R.string.upd_perm_msg)),
+            listOf(bCancel, bGo),
+            false
+        )
+        bCancel.setOnClickListener { dlg.dismiss() }
+        bGo.setOnClickListener {
+            dlg.dismiss()
+            openUnknownSources(activity)
+        }
+    }
+
+    /**
+     * 从系统设置回到 App 时调一次：权限刚被打开就把留着的包直接装掉。
+     *
+     * 用户按提示去开开关，回来还得再点一遍「下载并安装」是反人类的 ——
+     * 包在 cache 里躺着，直接续上。
+     */
+    fun resumePending(activity: Activity) {
+        val apk = pendingApk ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !activity.packageManager.canRequestPackageInstalls()
+        ) return
+        pendingApk = null
+        val v = pendingVer
+        pendingVer = ""
+        if (apk.isFile && apk.length() > 0) launchInstaller(activity, apk, v)
     }
 
     // ---------------------------------------------------------------- 设置界面
@@ -629,19 +695,36 @@ object ApkUpdater {
     private fun dp(ctx: Context, v: Int): Int =
         (v * ctx.resources.displayMetrics.density).toInt()
 
-    /** 保留：某些 ROM 的「未知来源」开关要从这里跳 */
-    @Suppress("unused")
-    private fun settingsIntent(ctx: Context) {
+    /**
+     * 跳到本 App 的「安装未知应用」开关页。
+     *
+     * `ACTION_MANAGE_UNKNOWN_APP_SOURCES` 必须带 `package:` 的 data，
+     * 不带就落到「所有 App」列表页，用户得自己在几十行里找本 App；
+     * 带了则直接进本 App 那一页，只有一个开关。
+     * 少数 ROM 把这个 Activity 藏了，退化成打开应用详情页，总比没有强。
+     */
+    private fun openUnknownSources(ctx: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val pkgUri = Uri.parse("package:" + ctx.packageName)
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ctx.startActivity(
-                    Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
-                        .setData(Uri.parse("package:" + ctx.packageName))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
+            ctx.startActivity(
+                Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                    .setData(pkgUri)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            Log.i(TAG, "open unknown-sources settings")
+            return
         } catch (t: Throwable) {
-            // 打不开就算了，安装器自己会提示去哪开
+            Log.i(TAG, "unknown-sources page missing: " + t.javaClass.simpleName)
+        }
+        try {
+            ctx.startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(pkgUri)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (t: Throwable) {
+            toast(ctx, ctx.getString(R.string.upd_perm_no_settings))
         }
     }
 

@@ -248,6 +248,7 @@ public final class Update {
      */
     public static boolean download(String url, java.io.OutputStream sink, Step onStep) {
         HttpURLConnection c = null;
+        lastError = "";
         try {
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(TIMEOUT_MS);
@@ -279,12 +280,24 @@ public final class Update {
             sink.flush();
             if (onStep != null) onStep.onStep(got, total);
             // 大小对不上就当失败：可以拦住被截断的下载（移动网络下并不少见）
-            return total <= 0 || got == total;
+            if (total > 0 && got != total) {
+                lastError = "只收到 " + got + " / " + total + " 字节";
+                return false;
+            }
+            return true;
         } catch (Throwable t) {
+            lastError = describe(t);
             return false;
         } finally {
             if (c != null) c.disconnect();
         }
+    }
+
+    /** 最近一次下载失败的具体原因（成功时为空串）。给上层拼一句人话用。 */
+    private static volatile String lastError = "";
+
+    public static String lastError() {
+        return lastError;
     }
 
     /** 下载进度回调 */

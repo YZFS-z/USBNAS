@@ -36,6 +36,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.SystemClock;
 
 /**
@@ -815,6 +817,13 @@ public class HttpServer {
         if (p != null && p.equals("/_photos")) {
             return !cfg.hasAccounts() || req.user != null || cfg.anonymousRead;
         }
+        // 相册缩略图：它是「原图的小样」，口径必须和原图一致 —— 见 needLoginForFile()，
+        // 那里对 isPhotoName() 的结论是「图片一律要登录」（不理会 anonymousRead）。
+        // 缩略图如果放匿名就绕过了这条线：知道清单之后能逐张拉小图，
+        // 等于用 300px 的代价把整个相册看一遍。所以这里跟原图一样，只认登录。
+        if (p != null && p.equals("/_photos/thumb")) {
+            return !cfg.hasAccounts() || req.user != null;
+        }
         // 相册删除：写操作，一律先落到 handler 里判管理员等级，
         // 在这一层放行（否则匿名会拿到 401，客户端没法区分「没登录」和「不是管理员」）
         if (p != null && p.equals("/_photos/delete")) {
@@ -1252,6 +1261,12 @@ public class HttpServer {
             return;
         }
 
+        // 相册缩略图：相册墙一格只有 104dp 宽，拉原图等于用 1.9MB 换 330px
+        if (path.equals("/_photos/thumb")) {
+            handlePhotoThumb(req, out);
+            return;
+        }
+
         // 批量删除照片：客户端相册多选后提交。只动相册目录里的图片文件，
         // 且要求管理员（删盘上文件是写操作，和改目录配置同级）。
         if (path.equals("/_photos/delete")) {
@@ -1664,8 +1679,19 @@ public class HttpServer {
     private static final int MUSIC_MAX_FILES = 20000;
     /** 曲库缓存有效期：目录里加歌后最多这么久就能被客户端看到 */
     private static final long MUSIC_TTL_MS = 30000L;
-    /** 单次曲库扫描的墙钟上限，超时就先返回已扫到的部分 */
-    private static final long MUSIC_SCAN_BUDGET_MS = 4000L;
+
+    /**
+     * 单次曲库扫描的墙钟上限。
+     *
+     * 原来是 4000ms，比真实工作量小太多：1197 首走 fuse 读 id3 要 18 秒，
+     * 4 秒一到就「先返回已扫到的部分」，于是客户端拿到的永远是残缺列表 —
+     * 第一次看到 200 首，第二次看到 800 首，歌单前后不一致，用户以为丢歌了。
+     *
+     * 改成 30 秒：一次扫完，写完缓存，之后 30 秒内都是热命中（实测 1.4 秒）。
+     * 配套把客户端超时提到 45 秒（`LibraryActivity.LOAD_TIMEOUT_MS`），
+     * 让首扫能跑完。真要更大的库也扫不完，`MUSIC_MAX_FILES` 会先兜住。
+     */
+    private static final long MUSIC_SCAN_BUDGET_MS = 30000L;
 
     private static final Set<String> AUDIO_EXT = new HashSet<>(Arrays.asList(
             "mp3", "flac", "m4a", "wav", "aac", "ogg", "ape", "wma", "opus", "amr"));
@@ -1685,10 +1711,22 @@ public class HttpServer {
             "cover", "folder", "front", "album", "albumart", "albumartsmall",
             "thumb", "artwork", "albumartlarge"));
 
-    /** 曲库缓存：'\0' 哨兵表示「还没扫过」，任何配置的 hashCode 都不会等于它 */
-    private volatile List<MusicTrack> musicCache;
-    private volatile long musicCacheAt;
-    private String musicCacheKey = "\u0000";
+    /**
+     * 曲库缓存，按「目录配置」分桶。
+     *
+     * 原来只有一个槽位 + 一个 key：改一次目录就让整份缓存作废，而且改回来还要
+     * 重扫。分成小 map 之后，网页端来回切音乐目录不用再等 18 秒。条目数用
+     * [MUSIC_CACHE_MAX] 兜底 —— 正常情况下一个人只会配一两组目录。
+     */
+    private final java.util.LinkedHashMap<String, List<MusicTrack>> musicCaches =
+            new java.util.LinkedHashMap<String, List<MusicTrack>>(4, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, List<MusicTrack>> e) {
+                    return size() > MUSIC_CACHE_MAX;
+                }
+            };
+    private final java.util.Map<String, Long> musicCacheTimes = new java.util.HashMap<>();
+    private static final int MUSIC_CACHE_MAX = 8;
 
     private static final class MusicTrack {
         String path;   // 服务端绝对路径
@@ -1710,9 +1748,10 @@ public class HttpServer {
 
     /** App 里改了音乐目录后调用：清缓存，下次请求重扫 */
     void invalidateMusicLib() {
-        musicCache = null;
-        musicCacheAt = 0L;
-        musicCacheKey = "\u0000";
+        synchronized (musicCaches) {
+            musicCaches.clear();
+            musicCacheTimes.clear();
+        }
     }
 
     /**
@@ -1775,8 +1814,17 @@ public class HttpServer {
                     .append(",\"i\":").append(hasEmbeddedCover(t.path) ? 1 : 0)
                     .append('}');
         }
-        sb.append("],\"scannedAt\":").append(musicCacheAt).append('}');
+        sb.append("],\"scannedAt\":").append(musicScannedAt()).append('}');
         sendJson(out, sb.toString());
+    }
+
+    /** 当前目录配置那一桶的扫描时间；没扫过就是 0。 */
+    private long musicScannedAt() {
+        String key = cfg.musicDirs == null ? "" : String.valueOf(cfg.musicDirs.hashCode());
+        synchronized (musicCaches) {
+            Long at = musicCacheTimes.get(key);
+            return at == null ? 0L : at;
+        }
     }
 
     /**
@@ -1911,32 +1959,34 @@ public class HttpServer {
     private List<MusicTrack> musicLibrary() {
         String key = cfg.musicDirs == null ? "" : String.valueOf(cfg.musicDirs.hashCode());
         long now = System.currentTimeMillis();
-        List<MusicTrack> c = musicCache;
-        if (c != null && now - musicCacheAt < MUSIC_TTL_MS && key.equals(musicCacheKey)) return c;
+        synchronized (musicCaches) {
+            List<MusicTrack> c = musicCaches.get(key);
+            Long at = musicCacheTimes.get(key);
+            if (c != null && at != null && now - at < MUSIC_TTL_MS) return c;
 
-        List<MusicTrack> out = new ArrayList<>();
-        long deadline = now + MUSIC_SCAN_BUDGET_MS;
-        List<String> dirs = cfg.musicDirs;
-        if (dirs == null || dirs.isEmpty()) {
-            // 没配目录：退回扫全部共享根，保证客户端拿到的不是空列表
-            for (File r : liveRoots()) walkMusic(r, out, deadline, 0);
-        } else {
-            for (String d : dirs) {
-                File f = new File(d);
-                if (!f.isDirectory()) continue;
-                if (!inMusicDirs(f)) continue;
-                walkMusic(f, out, deadline, 0);
+            List<MusicTrack> out = new ArrayList<>();
+            long deadline = now + MUSIC_SCAN_BUDGET_MS;
+            List<String> dirs = cfg.musicDirs;
+            if (dirs == null || dirs.isEmpty()) {
+                // 没配目录：退回扫全部共享根，保证客户端拿到的不是空列表
+                for (File r : liveRoots()) walkMusic(r, out, deadline, 0);
+            } else {
+                for (String d : dirs) {
+                    File f = new File(d);
+                    if (!f.isDirectory()) continue;
+                    if (!inMusicDirs(f)) continue;
+                    walkMusic(f, out, deadline, 0);
+                }
             }
-        }
-        out.sort((a, b) -> {
-            int r = a.dir.compareToIgnoreCase(b.dir);
-            return r != 0 ? r : a.name.compareToIgnoreCase(b.name);
-        });
+            out.sort((a, b) -> {
+                int r = a.dir.compareToIgnoreCase(b.dir);
+                return r != 0 ? r : a.name.compareToIgnoreCase(b.name);
+            });
 
-        musicCache = out;
-        musicCacheAt = now;
-        musicCacheKey = key;
-        return out;
+            musicCaches.put(key, out);
+            musicCacheTimes.put(key, now);
+            return out;
+        }
     }
 
     /** 路径是否落在预设音乐目录里（含目录本身） */
@@ -1970,11 +2020,42 @@ public class HttpServer {
     private volatile long photoCacheAt;
     private String photoCacheKey = "\u0000";
 
+    /** 缩略图边长上限：再大就不叫缩略图了，客户端格子只有 104dp */
+    private static final int PHOTO_THUMB_MAX = 480;
+
+    /** 缩略图默认边长：1080 宽 3 列、每格约 330px，320 够清楚又不糊 */
+    private static final int PHOTO_THUMB_DEF = 320;
+
+    /** 缩略图 JPEG 质量。80 在一张 320px 小图上肉眼看不出差别，体积约 15–30KB */
+    private static final int PHOTO_THUMB_QUALITY = 80;
+
+    /**
+     * 缩略图内存缓存（按访问顺序淘汰）。
+     *
+     * <p>为什么服务端也要缓存：一台手机往上滑相册，同一批图会被反复请求
+     * （滑出去再滑回来、切页签再切回来）。每次重解一张 4000×3000 的 JPEG
+     * 要 100–200ms、还要占 48MB 堆，三线程并发解码能把手机拖到 ANR。
+     * 缓存下来之后一次命中就是 memcpy。
+     *
+     * <p>按「条数」而不是「字节数」限：缩略图尺寸由 want 封顶，
+     * 单条最多几十 KB，600 条约 10–18MB，可控且不必维护字节账本。
+     */
+    private final java.util.LinkedHashMap<String, byte[]> photoThumbCache =
+            new java.util.LinkedHashMap<String, byte[]>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, byte[]> e) {
+                    return size() > 600;
+                }
+            };
+
     /** App 里改了相册目录后调用：清缓存，下次请求重扫 */
     void invalidatePhotoLib() {
         photoCache = null;
         photoCacheAt = 0L;
         photoCacheKey = "\u0000";
+        synchronized (photoThumbCache) {
+            photoThumbCache.clear();
+        }
     }
 
     /**
@@ -2060,6 +2141,137 @@ public class HttpServer {
     }
 
     /** 当前目录是否落在预设的相册目录里（没配就等于「什么都不许」） */
+    /**
+     * GET /_photos/thumb?f=绝对路径&w=边长
+     *
+     * <p><b>为什么必须有这个端点。</b>相册墙一格是 104dp（1080 宽屏上约 330px），
+     * 而在它之前客户端只能直接 GET 原图：一张 4000×3000 的手机照片是 1.9MB、
+     * 解出来是 48MB ARGB_8888。685 张图意味着客户端排队下 1.3GB、解 32GB ——
+     * 这不是「慢一点」，是必然 OOM + 必然滑不动。服务端在这件事上省不了：
+     * 它手里才有一份能读的原文件，也只有它能一边读一边降采样。
+     *
+     * <p>做法是 JPEG 编码后的字节直接回，不落盘（写盘会让 U 盘一直转）。
+     * {@link BitmapFactory.Options#inSampleSize} 只能取 2 的幂，所以实际边长
+     * 可能比 w 大最多一倍，再靠 {@code Bitmap.createScaledBitmap} 收到目标内 ——
+     * 两次采样都在同一个线程里做完，中途不持有原尺寸 Bitmap。
+     *
+     * <p>缓存两层：内存 LRU（{@link #photoThumbCache}）挡重复解码，
+     * 响应头 {@code Cache-Control} 挡客户端的重复请求。
+     */
+    private void handlePhotoThumb(Request req, OutputStream out) throws IOException {
+        File f = resolve(req.param("f"));
+        if (f == null || !f.isFile() || !inPhotoDirs(f) || !isPhotoName(f.getName())) {
+            sendBytes(out, "text/plain; charset=utf-8",
+                    "not a photo".getBytes(StandardCharsets.UTF_8), 404, "Not Found");
+            return;
+        }
+        int want = PHOTO_THUMB_DEF;
+        String ws = req.param("w");
+        if (ws != null && !ws.trim().isEmpty()) {
+            try {
+                want = Integer.parseInt(ws.trim());
+            } catch (NumberFormatException ignored) {
+                want = PHOTO_THUMB_DEF;
+            }
+        }
+        if (want <= 0) want = PHOTO_THUMB_DEF;
+        if (want > PHOTO_THUMB_MAX) want = PHOTO_THUMB_MAX;
+
+        // 缓存键带上 mtime 与目标尺寸：同名文件被覆盖、或同一张图要两种尺寸，都不能串味
+        String key = f.getAbsolutePath() + "|" + f.lastModified() + "|" + want;
+        byte[] data;
+        synchronized (photoThumbCache) {
+            data = photoThumbCache.get(key);
+        }
+        if (data == null) {
+            data = buildThumb(f, want);
+            if (data == null) {
+                sendBytes(out, "text/plain; charset=utf-8",
+                        "decode failed".getBytes(StandardCharsets.UTF_8), 415, "Unsupported Media Type");
+                return;
+            }
+            synchronized (photoThumbCache) {
+                photoThumbCache.put(key, data);
+            }
+        }
+
+        // ETag 用「长度-mtime-边长」：三者任一变了缩略图就不一样。
+        // 客户端下次带 If-None-Match 回来问，一张已经看过的图连正文都不传。
+        String tag = "\"" + data.length + "-" + f.lastModified() + "-" + want + "\"";
+        String inm = req.headers.get("if-none-match");
+        if (inm != null && inm.contains(tag.replace("\"", ""))) {
+            out.write(("HTTP/1.1 304 Not Modified\r\n"
+                    + "Server: " + cfg.title + "\r\n"
+                    + "ETag: " + tag + "\r\n"
+                    + "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            return;
+        }
+        byte[] head = ("HTTP/1.1 200 OK\r\n"
+                + "Server: " + cfg.title + "\r\n"
+                + "Content-Type: image/jpeg\r\n"
+                + "Content-Length: " + data.length + "\r\n"
+                + "ETag: " + tag + "\r\n"
+                + "Cache-Control: private, max-age=604800\r\n"
+                + "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8);
+        out.write(head);
+        out.write(data);
+        out.flush();
+    }
+
+    /**
+     * 把一张原图压成最长边 {@code want} 以内的 JPEG 字节。
+     *
+     * <p>顺序很重要：先 inJustDecodeBounds 只读头拿尺寸（几乎零成本），
+     * 再按 2 的幂挑 inSampleSize，让第一次解码出来的位图就已经接近目标 ——
+     * 如果直接 decode 再缩，那张 48MB 的中间图还是要分配一次，等于没省。
+     *
+     * <p>失败返回 null，交给调用方回 415：HEIC 在部分机型上系统解不了，
+     * 这属于「这张图转不动」，不是服务端坏了。
+     */
+    private static byte[] buildThumb(File f, int want) {
+        Bitmap full = null;
+        Bitmap scaled = null;
+        try {
+            BitmapFactory.Options probe = new BitmapFactory.Options();
+            probe.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(f.getAbsolutePath(), probe);
+            if (probe.outWidth <= 0 || probe.outHeight <= 0) return null;
+
+            int longSide = Math.max(probe.outWidth, probe.outHeight);
+            int sample = 1;
+            // 每翻一倍体积降 4 倍；留 1.6 倍余量，避免缩得比目标还小再放大
+            while (longSide / (sample * 2) >= want * 1.6f) sample *= 2;
+
+            BitmapFactory.Options opt = new BitmapFactory.Options();
+            opt.inSampleSize = sample;
+            opt.inPreferredConfig = Bitmap.Config.RGB_565; // 缩略图不要 alpha，省一半内存
+            full = BitmapFactory.decodeFile(f.getAbsolutePath(), opt);
+            if (full == null) return null;
+
+            int lw = Math.max(full.getWidth(), full.getHeight());
+            if (lw <= want) {
+                scaled = full; // 已经比目标小，原样编码，别放大糊掉
+                full = null;
+            } else {
+                float k = (float) want / lw;
+                int nw = Math.max(1, Math.round(full.getWidth() * k));
+                int nh = Math.max(1, Math.round(full.getHeight() * k));
+                scaled = Bitmap.createScaledBitmap(full, nw, nh, true);
+            }
+
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(32 * 1024);
+            if (!scaled.compress(Bitmap.CompressFormat.JPEG, PHOTO_THUMB_QUALITY, bos)) return null;
+            return bos.toByteArray();
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            // 两个都可能指向同一对象（小图那条分支把 full 置 null 了），所以分开判
+            if (full != null && full != scaled) full.recycle();
+            if (scaled != null) scaled.recycle();
+        }
+    }
+
     /**
      * 批量删除照片（POST /_photos/delete）。
      *

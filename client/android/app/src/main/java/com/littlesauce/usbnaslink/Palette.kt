@@ -1,14 +1,17 @@
 package com.littlesauce.usbnaslink
 
+import android.app.Dialog
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -337,4 +340,138 @@ object Palette {
 
     /** 需要着色时用（CheckBox 方块、ProgressBar）。 */
     fun tint(color: Int): ColorStateList = ColorStateList.valueOf(color)
+
+    // ------------------------------------------------------------ 对话框
+
+    /**
+     * 自绘对话框的骨架：无系统标题栏、圆角卡片底、内容主体可任意填。
+     *
+     * 为什么不用 `AlertDialog.Builder`：
+     *   系统 AlertDialog 的底色、标题字号、按钮排布全由 `Theme.Material` 决定，
+     *   在本 App 的深色页面上会突兀地弹出一块浅色（或另一种深灰）的板子，标题
+     *   带系统默认的分隔线，按钮是系统那种大写、拉满宽度的样式 —— 跟页面里那些
+     *   `Palette.outline`/`Palette.ghost` 画出来的按钮完全不像同一套东西。用户
+     *   原话是「账号管理二级弹窗 UI 与其他不匹配」，指的就是这里。
+     *
+     * 桌面端 `Theme.java` 早就是这么做的（`message`/`confirm`/`options` 三个自绘
+     * 重载），这里把同一套思路搬到 Android：底 = `CARD`，描边 = `LINE`，标题
+     * `FG` 加粗，正文 `DIM2`，底部按钮右对齐、主次分明。
+     *
+     * 返回的 `Dialog` 已 `show()` 过，调用方拿到的是可见的窗；`body` 由调用方
+     * 决定，可以是说明文字、输入框，或者一列选项。
+     *
+     * @param title 标题，为 null 时不占行
+     * @param body  中间内容，为 null 时不占行
+     * @param acts  底部按钮，从右往左排（最后一个在主位）
+     */
+    @JvmOverloads
+    fun dialog(
+        ctx: Context,
+        title: String?,
+        body: View? = null,
+        acts: List<Button> = emptyList(),
+        cancelable: Boolean = true
+    ): Dialog {
+        val dlg = Dialog(ctx)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        // 系统窗底自带一层 dim + 圆角，这里自己画，别让两层叠出双边框
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+
+        val box = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(ctx, 20), dp(ctx, 18), dp(ctx, 20), dp(ctx, 16))
+            background = round(ctx, CARD, 14f, LINE, 1f)
+        }
+        if (title != null) {
+            box.addView(TextView(ctx).apply {
+                text = title
+                setTextColor(FG)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTypeface(typeface, Typeface.BOLD)
+            })
+        }
+        if (body != null) {
+            box.addView(body, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = if (title == null) 0 else dp(ctx, 10)
+            })
+        }
+        if (acts.isNotEmpty()) {
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+            }
+            for ((i, b) in acts.withIndex()) {
+                row.addView(b, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 38)).apply {
+                    if (i > 0) leftMargin = dp(ctx, 8)
+                })
+            }
+            box.addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(ctx, 16)
+            })
+        }
+
+        dlg.setContentView(box)
+        dlg.setCanceledOnTouchOutside(cancelable)
+        // 宽度固定成屏宽的 86%：内容长短不一时窗子不会忽宽忽窄，读起来稳。
+        // 高度交给内容自己撑，`WRAP_CONTENT` 对长短两种文案都合适。
+        dlg.window?.setLayout(
+            (ctx.resources.displayMetrics.widthPixels * 0.86f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        dlg.show()
+        return dlg
+    }
+
+    /** 对话框里的正文段落（可多行）。 */
+    fun dialogText(ctx: Context, s: String): TextView =
+        TextView(ctx).apply {
+            text = s
+            setTextColor(DIM2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setLineSpacing(dp(ctx, 4).toFloat(), 1f)
+        }
+
+    /**
+     * 竖排单选列表，供「改等级」这类选项对话框用。
+     *
+     * 每行是一个可选中的 `TextView`，选中态用页签那套「主色淡底 + 主色字 +
+     * 主色描边」，与页面里的页签完全同款 —— 系统 `setSingleChoiceItems` 画的
+     * 是系统 Radio 圆点 + 系统行高，跟这里格格不入。
+     *
+     * @param selected 初始选中下标
+     * @param onPick   点了就回调并关闭对话框（行为与原来一套一致）
+     */
+    fun dialogChoices(
+        ctx: Context,
+        options: List<String>,
+        selected: Int,
+        onPick: (Int) -> Unit
+    ): LinearLayout {
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        for ((i, s) in options.withIndex()) {
+            val row = TextView(ctx).apply {
+                text = s
+                gravity = Gravity.CENTER_VERTICAL
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setPadding(dp(ctx, 14), dp(ctx, 11), dp(ctx, 14), dp(ctx, 11))
+                paintTab(this, i == selected)
+                isClickable = true
+                isFocusable = true
+            }
+            row.setOnClickListener {
+                onPick(i)
+                (it.tag as? Dialog)?.dismiss()
+            }
+            col.addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                if (i > 0) topMargin = dp(ctx, 6)
+            })
+        }
+        return col
+    }
 }

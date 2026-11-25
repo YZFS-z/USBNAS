@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity() {
          * （HttpServer 里另有 APP_VER 常量），两边必须一致，所以发版时两处一起改，
          * 并在 RELEASING.md 里写清楚。只改 gradle 的 versionName 不会影响这里。
          */
-        const val APP_VER = "1.0.6"
+        const val APP_VER = "1.0.7"
     }
 
     // 两套布局的控件并不完全一致（竖屏首页在 homeScroll 里，横屏分两列各自滚），

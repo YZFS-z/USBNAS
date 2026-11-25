@@ -18,6 +18,16 @@
          没授权时按钮负责把人引过去，不申请就静默不做 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!--
+        自动更新要装自己下载的 APK，安卓 8.0 起必须声明这个权限，
+        并且由用户逐个 App 打开「安装未知应用」。
+        漏了它会造成一个很难查的现象：下载进度条跑完 100%，
+        FileProvider 的 content:// 也交出去了，系统安装器却一声不响 ——
+        appops 里 REQUEST_INSTALL_PACKAGES 的默认值就是 deny，
+        canRequestPackageInstalls() 恒为 false，Intent 被静默丢弃。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"

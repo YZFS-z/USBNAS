@@ -325,6 +325,10 @@
     <string name="upd_incomplete">下载不完整</string>
     <string name="upd_download_fail">下载失败：%1$s</string>
     <string name="upd_no_installer">打不开安装器：%1$s，安装包在 %2$s</string>
+    <string name="upd_perm_title">系统还没允许装软件</string>
+    <string name="upd_perm_msg">安装包已经下好了，但安卓默认不允许一个 App 自己装 APK。\n\n到「安装未知应用」里把本 App 打开，回到这里会自动接着装，不用重新下载。</string>
+    <string name="upd_perm_go">去打开</string>
+    <string name="upd_perm_no_settings">打不开系统设置找一下「设置 → 应用 → 特殊权限 → 安装未知应用」，本 App 的安装包还在缓存里</string>
     <string name="upd_title">自动更新</string>
     <string name="upd_check_online">联网检查新版本</string>
     <string name="upd_check_note">当前 %1$s。打开后每次启动最多查一次 GitHub Release（间隔不少于 6 小时）；关掉就一个请求都不发。</string>
