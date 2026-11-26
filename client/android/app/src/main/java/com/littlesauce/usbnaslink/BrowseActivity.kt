@@ -79,6 +79,10 @@ class BrowseActivity : AppCompatActivity() {
         ThemeCtl.prime(this)
         // 语言同理：字符串资源在建界面时就定死了，晚一步就已经拿旧语言 inflate 了。
         L.prime(this)
+        // 网页页签也走全屏沉浸：主题里 statusBarColor 是透明的，但不调
+        // Immersive.prepare 就没有 setDecorFitsSystemWindows(false)，横屏时
+        // 状态栏那一条不会被页面覆盖，露出一条黑边。其它页面都调了，这里之前漏了。
+        Immersive.prepare(this)
         setContentView(R.layout.activity_browse)
         prefs = Prefs(this)
 
@@ -265,6 +269,11 @@ class BrowseActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         web.onResume()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) Immersive.enter(this)
     }
 
     override fun onDestroy() {

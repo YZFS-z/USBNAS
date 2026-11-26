@@ -9,9 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.util.concurrent.Executors
@@ -50,16 +48,15 @@ object ShareTreeView {
         }
         root.addView(hint)
 
-        // 树区域：限高，避免把管理页撑爆
-        val tree = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        val treeScroll = ScrollView(ctx).apply {
-            addView(tree, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            setBackgroundColor(Palette.CARD)
+        // 树区域：不能再套内层 ScrollView。管理页本身已在外层 scroll 里，
+        // 嵌套同向滚动要么把树限成固定高度（只露出前几行，根节点十几个目录看不全），
+        // 要么滑动被内层吃掉。直接铺开让外层统一滚，展开多少就长多少。
+        val tree = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
             background = Palette.round(ctx, Palette.CARD, 9f, Palette.LINE, 1f)
         }
-        root.addView(treeScroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 240)).apply {
+        root.addView(tree, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(ctx, 2)
         })
 
@@ -70,13 +67,10 @@ object ShareTreeView {
             setTextColor(Palette.FG2)
             setPadding(dp(ctx, 2), dp(ctx, 10), dp(ctx, 2), dp(ctx, 4))
         })
+        // 分享列表同理：铺开交给外层滚动，避免限高后看不到靠后的分享
         val list = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        val listScroll = ScrollView(ctx).apply {
-            addView(list, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        root.addView(listScroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 170)))
+        root.addView(list, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         fun reloadList() {
             io.execute {

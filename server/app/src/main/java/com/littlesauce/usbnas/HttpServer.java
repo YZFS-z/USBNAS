@@ -7719,7 +7719,10 @@ public class HttpServer {
         if (writeAllowed) {
             sb.append("<script>window.USBNAS_BASE=")
               .append(jsStr(baseUrlFor(req))).append(";</script>\n");
-            sb.append("<script>\n").append(SHARE_JS).append("</script>\n");
+            // SHARE_JS 自带 <script> 标签（和 RNMOVE_JS/DELONE_JS 一样），
+            // 这里不能再包一层 —— 双重 <script> 会让整段脚本被当成文本解析，
+            // 结果就是目录页的「分享」按钮点了没反应。
+            sb.append(SHARE_JS);
         }
         htmlFoot(sb);
         return sb.toString();
