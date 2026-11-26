@@ -41,7 +41,7 @@ object ShareTreeView {
         }
 
         val hint = TextView(ctx).apply {
-            text = "点 ▸ 展开目录，点每行「分享」生成免登录短链（局域网内可直接打开，重启失效）"
+            text = "点 ▸ 展开内部存储或外接 U 盘，点每行「分享」生成免登录短链（局域网内可直接打开，重启失效）"
             textSize = 12f
             setTextColor(Palette.FG2)
             setPadding(dp(ctx, 2), 0, dp(ctx, 2), dp(ctx, 6))
@@ -137,6 +137,19 @@ object ShareTreeView {
         return root
     }
 
+    /**
+     * 外接 U 盘的卷根节点用 💾，和内部存储 / 普通目录一眼区分开。
+     * 只有卷根（父目录是 /mnt/media_rw 或 /storage）算，U 盘里的子目录照旧 📁。
+     */
+    private fun shareIcon(n: Share.Node): String {
+        if (n.dir) {
+            val parent = n.path.trimEnd('/').substringBeforeLast('/')
+            if (parent == "/mnt/media_rw" || parent == "/storage") return "💾 "
+            return "📁 "
+        }
+        return "🎞 "
+    }
+
     /** 一个树节点行：▸ + 图标 + 名字 + 分享按钮；子节点容器点开才加载 */
     private fun nodeRow(
         ctx: Context, base: String, sid: String?, n: Share.Node,
@@ -157,7 +170,7 @@ object ShareTreeView {
         }
         row.addView(arrow, LinearLayout.LayoutParams(dp(ctx, 26), ViewGroup.LayoutParams.WRAP_CONTENT))
         row.addView(TextView(ctx).apply {
-            text = (if (n.dir) "📁 " else "🎞 ") + n.name
+            text = shareIcon(n) + n.name
             textSize = 13f
             setTextColor(Palette.FG)
             if (n.dir) setTypeface(typeface, Typeface.BOLD)

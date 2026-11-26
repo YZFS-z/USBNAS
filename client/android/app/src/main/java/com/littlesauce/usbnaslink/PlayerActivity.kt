@@ -59,7 +59,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private lateinit var modeBtn: Button
     private lateinit var scrapeBtn: Button
     private lateinit var overlayBtn: Button
-    private lateinit var lyricTag: TextView
+    /** 刮削歌词 + 桌面歌词 + 歌词位移，统一装在这一张圆角卡片里 */
+    private lateinit var lyricToolsCard: LinearLayout
     /** 歌词位移控制行：提前 / 当前偏移标签 / 延后 / 归零 */
     private lateinit var offsetRow: LinearLayout
     private lateinit var offsetLabel: TextView
@@ -222,10 +223,10 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         scrapeBtn = ctlButton(getString(R.string.play_scrape)) { askScrape() }
         overlayBtn = ctlButton(getString(R.string.play_overlay_on)) { toggleOverlay() }
         tools.addView(scrapeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(8)
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(2)
         })
         tools.addView(overlayBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(8)
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(2)
         })
 
         // 第三排：歌词时间位移。音词对不上时用户自己 ±0.5s 微调，
@@ -244,28 +245,31 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         val laterBtn = ctlButton(getString(R.string.play_lyric_later)) { nudgeLyric(500) }
         val resetBtn = ctlButton(getString(R.string.play_lyric_offset_reset)) { nudgeLyric(0, reset = true) }
         offsetRow.addView(earlierBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
         })
         offsetRow.addView(offsetLabel, LinearLayout.LayoutParams(0, dp(38), 0.9f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
         })
         offsetRow.addView(laterBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
         })
         offsetRow.addView(resetBtn, LinearLayout.LayoutParams(0, dp(38), 0.7f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(6)
+            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
         })
         updateOffsetLabel()
 
-        // 一行状态尾巴：既方便用户看「现在是不是在唱」，也让自动化脚本
-        // 能靠这行文字判断播放状态（播放页每 200ms 刷一次，uiautomator 等不到 idle）
-        lyricTag = TextView(this).apply {
-            setTextColor(Palette.FAINT)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, 0)
-            text = getString(R.string.play_ready)
+        // 刮削歌词 / 桌面歌词 / 位移微调合成一张圆角卡片：原来三排是散在
+        // 页面背景上的裸按钮，看起来像三个不相干的功能；收进同一张卡里，
+        // 横竖屏换父容器时也只要搬这一块。
+        lyricToolsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            background = Palette.round(this@PlayerActivity, Palette.CARD, 12f, Palette.LINE, 1f)
         }
+        lyricToolsCard.addView(tools, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        lyricToolsCard.addView(offsetRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ---- 竖屏：标题/副标题 + 唱片 + 歌词 + 进度 + 按钮，一路竖着排 ----
         // 这里只放 title/sub 两个竖屏专属控件；其余八个「会搬家」的由 attachOrientation 分发
@@ -273,7 +277,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         portraitRow.addView(sub)
 
         // ---- 横屏：左边整块只放唱片，右边从上到下是标题/歌词/进度/按钮 ----
-        // disc/lyric/timeText/bar/hint/ctl/tools/lyricTag 这些是「会搬家」的控件：
+        // disc/lyric/timeText/bar/hint/ctl/lyricToolsCard 这些是「会搬家」的控件：
         // 竖屏挂在 portraitRow，横屏要换挂到 leftCol/rightCol。所以这里不预先 add，
         // 只把两个容器挂好，真正归属交给 attachOrientation(竖屏) 一次性分发 ——
         // 同一个 View 挂两个父容器会直接抛
@@ -302,8 +306,6 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 结果 disc/lyric/按钮一个都没挂上去（实测表现为 DiscView 0,0-0,0、整页空白）
         hintView = hint
         ctlView = ctl
-        toolsView = tools
-        offsetRowView = offsetRow
         isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         attachOrientation(isLandscape)
         portraitRow.visibility = if (isLandscape) View.GONE else View.VISIBLE
@@ -320,21 +322,17 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     /**
      * 把「会搬家」的控件挂到当前姿态该去的父容器里。
      *
-     * disc/lyric/timeText/bar/hint/ctl/tools/lyricTag 这八个控件两种姿态都要用，
+     * disc/lyric/timeText/bar/hint/ctl/lyricToolsCard 这些控件两种姿态都要用，
      * 但一个 View 只能有一个父容器，所以换姿态时只能真的挪（先 removeView 再 addView）。
      * 挪之前记下它在竖屏里的期望高度/权重，挪之后重新下发 LayoutParams：
      * disc 竖屏是 height=0+weight，横屏是 match_parent×match_parent+weight=1。
      */
     private var hintView: TextView? = null
     private var ctlView: LinearLayout? = null
-    private var toolsView: LinearLayout? = null
-    private var offsetRowView: LinearLayout? = null
 
     private fun attachOrientation(landscape: Boolean) {
         val hint = hintView ?: return
         val ctl = ctlView ?: return
-        val tools = toolsView ?: return
-        val offsetRow = offsetRowView ?: return
         val movers = listOf<Pair<android.view.View, LinearLayout.LayoutParams>>(
             disc to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.15f).apply { topMargin = dp(10) },
@@ -348,12 +346,10 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
             ctl to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
-            tools to LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
-            offsetRow to LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
-            lyricTag to LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lyricToolsCard to LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(6)
+            }
         )
         for ((v, lp) in movers) {
             (v.parent as? android.view.ViewGroup)?.removeView(v)
@@ -375,8 +371,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply { topMargin = dp(10) }
                     v === lyric -> LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.8f).apply { topMargin = dp(12) }
-                    v === offsetRow -> LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+                    v === lyricToolsCard -> LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(100)).apply { topMargin = dp(6) }
                     else -> lp
                 }
                 portraitRow.addView(v, portraitLp)
@@ -535,7 +531,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 注意：这里不要 setSpinning(false)。切歌动画里唱针正抬着，落针由 DiscView 在
         // 新盘滑回来之后自己决定；手动置 false 会把「切歌」误当成「用户暂停」。
         loadCover(track)
-        lyricTag.text = getString(R.string.play_track_line, index + 1, player.playlist.items.size, track.lrcName ?: getString(R.string.play_no_lyrics))
+        // 底部那行「第 N/M 首 · 歌词名」已按反馈去掉；信息仍打进日志，不再占播放页面高度
         // 打一行日志：播放页刷新太密，uiautomator 抓不到 idle，出问题时只能靠日志定位
         android.util.Log.i("USBNASLink", "track ${index + 1}/${player.playlist.items.size} ${track.name} lrc=${track.lrcName ?: "-"}")
         // 换歌时上一首的候选列表必须关掉，否则点了会把 A 的歌词存给 B
@@ -827,7 +823,6 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                 }
                 // 存好了要让「当前这首」知道自己有歌词了，否则下一次 loadLyric 仍然早退
                 t.lrcName = finalRes.file
-                lyricTag.text = getString(R.string.play_saved, finalRes.file, finalRes.bytes)
                 player.reloadLyricFor(t)
                 toast(getString(R.string.play_saved_toast, finalRes.file))
             }
@@ -882,21 +877,14 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     }
 
     /**
-     * 提示一律「Toast + 状态行」双写。
+     * 提示走「Toast + 日志」双写。
      *
      * MIUI 的 Toast 既不进 logcat 文本、也不出现在 uiautomator 的树里，
-     * 想断言「点了之后到底提示了什么」只能靠页面上的常驻文字。状态行
-     * （lyricTag）本来就随这首歌显示「第 N/M 首 · 歌词名」，被提示覆盖掉
-     * 也不影响使用，切歌时会重新写。
+     * 所以额外打一条日志。原先还会把提示写进播放页底部的状态行，
+     * 但那一行常驻显示「第 N/M 首」占地方，已按反馈移除。
      */
     private fun toast(s: String) {
         android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show()
-        // 状态行同步显示：MIUI 的 Toast 既不在 logcat 里也不在 uiautomator 树里，
-        // 双写之后 logcat + 状态行都能拿到，脚本才断言得了。
-        try {
-            lyricTag.text = s
-        } catch (ignored: Throwable) {
-        }
         try {
             android.util.Log.i("USBNASLink", "toast: $s")
         } catch (ignored: Throwable) {

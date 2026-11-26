@@ -106,6 +106,7 @@
     <!-- Empty states and group headers -->
     <string name="lib_all_failed">Couldn\'t load any library: %1$s</string>
     <string name="lib_empty_video">No videos yet. Point a folder at “Video folders” on the web page and they\'ll show up here.</string>
+    <string name="lib_video_scanning">Scanning video folders (a cold USB drive can take a moment)…</string>
     <string name="lib_group_videos">%1$d</string>
     <string name="lib_group_other">Other</string>
     <string name="lib_empty_music">No music yet. Point a folder at “Music folders” on the web page and they\'ll show up here.</string>

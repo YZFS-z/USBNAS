@@ -142,6 +142,8 @@ class LibraryActivity : AppCompatActivity() {
     private var vlib: VideoLib.Lib? = null
     private var mlib: Music.Lib? = null
     private var blib: BookLib.Lib? = null
+    /** 影视扫描被时间预算截断时的自动重试次数；封顶后不再轮询，免得一直空转 */
+    private var videoScanRetries = 0
     private var plib: PhotoLib.Lib? = null
 
     /** 正在全屏看的那张图；null 表示没开。关闭时置回 null，避免持有 Dialog 泄漏 */
@@ -485,7 +487,13 @@ class LibraryActivity : AppCompatActivity() {
             currentTab == TAB_MUSIC && m == null -> getString(R.string.common_loading)
             currentTab == TAB_BOOK && b == null -> getString(R.string.common_loading)
             v == null && m == null && b == null -> getString(R.string.common_loading)
-            currentTab == TAB_VIDEO -> getString(R.string.lib_hint_video, v?.videos?.size ?: 0, v?.groups?.size ?: 0)
+            currentTab == TAB_VIDEO -> {
+                val lv = v
+                if (lv != null && lv.videos.isEmpty() && !lv.scanComplete)
+                    getString(R.string.common_loading)
+                else
+                    getString(R.string.lib_hint_video, lv?.videos?.size ?: 0, lv?.groups?.size ?: 0)
+            }
             currentTab == TAB_MUSIC -> {
                 val base = getString(R.string.lib_hint_music, m?.tracks?.size ?: 0, m?.dirs?.size ?: 0)
                 when (musicView) {
@@ -516,6 +524,7 @@ class LibraryActivity : AppCompatActivity() {
     private fun reload() {
         spinner.visibility = View.VISIBLE
         pending.clear()
+        videoScanRetries = 0
         if (currentTab == 0) pending.add(TAB_VIDEO)
         if (currentTab == 1) pending.add(TAB_MUSIC)
         if (currentTab == 2) pending.add(TAB_BOOK)
@@ -564,9 +573,17 @@ class LibraryActivity : AppCompatActivity() {
                     val v = VideoLib.fetch(base, ck, null, LOAD_TIMEOUT_MS)
                     ui.post {
                         vlib = v
+                        if (v.ok && v.scanComplete) videoScanRetries = 0
                         if (currentTab == TAB_VIDEO || videoHost.childCount > 0) buildVideos()
                         settle(tab)
-                        if (!v.ok) toast(getString(R.string.lib_all_failed, v.error ?: ""))
+                        if (!v.ok) {
+                            toast(getString(R.string.lib_all_failed, v.error ?: ""))
+                        } else if (!v.scanComplete && videoScanRetries < 6) {
+                            // 扫描被预算截断（U 盘冷启动很常见）：2 秒后再来一次。
+                            // 服务端对截断结果只缓存 3 秒，这里刚好错开，不会拿到同一份空快照。
+                            videoScanRetries++
+                            ui.postDelayed({ fetchTab(TAB_VIDEO) }, 2000)
+                        }
                     }
                 }
                 TAB_MUSIC -> {
@@ -609,7 +626,12 @@ class LibraryActivity : AppCompatActivity() {
             return
         }
         if (lib.videos.isEmpty()) {
-            videoHost.addView(msg(getString(R.string.lib_empty_video)))
+            // 已经配了影视目录但这次扫描被时间预算截断（U 盘冷启动常见），
+            // 服务端会回 complete=false。此时说「还没有影视」是误导：文件就在盘上，
+            // 只是还没扫到。显示扫描中，由 fetchTab 的延时重试继续拉。
+            val scanning = !lib.scanComplete && lib.roots.isNotEmpty()
+            videoHost.addView(msg(getString(
+                if (scanning) R.string.lib_video_scanning else R.string.lib_empty_video)))
             return
         }
         // 按服务端给的 groups 分块：盘0 / 盘1 / 内部存储 各成一段，

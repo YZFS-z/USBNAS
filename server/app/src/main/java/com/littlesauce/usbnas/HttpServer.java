@@ -2856,8 +2856,12 @@ public class HttpServer {
     private static final int VIDEO_MAX_FILES = 20000;
     /** 影视列表缓存时间；比音乐长一些，因为影视库目录更深、机械盘扫一次更贵 */
     private static final long VIDEO_TTL_MS = 60000L;
-    /** 单次扫描的时间预算，超了就先把扫到的返回去 */
-    private static final long VIDEO_SCAN_BUDGET_MS = 6000L;
+    /**
+     * 单次扫描的时间预算。U 盘刚插上或休眠唤醒后第一次列目录很慢，
+     * 6 秒经常一条都没扫到就被截断，客户端缓存住这个空结果后就一直显示「还没有影视」。
+     * 放宽到 15 秒；真超了也不缓存长 TTL（见 videoLibrary）。
+     */
+    private static final long VIDEO_SCAN_BUDGET_MS = 15000L;
 
     private static final Set<String> VIDEO_EXT = new HashSet<>(Arrays.asList(
             "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts",
@@ -2872,6 +2876,9 @@ public class HttpServer {
 
     private volatile List<VideoItem> videoCache;
     private volatile long videoCacheAt;
+    private volatile long videoCacheExpireAt;
+    /** 最近一次影视扫描有没有被时间预算/条数上限截断（给客户端区分「还在扫」和「真的没有」） */
+    private volatile boolean videoScanComplete = true;
     private String videoCacheKey = "\u0000";
 
     private static final class VideoItem {
@@ -2890,6 +2897,8 @@ public class HttpServer {
     void invalidateVideoLib() {
         videoCache = null;
         videoCacheAt = 0L;
+        videoCacheExpireAt = 0L;
+        videoScanComplete = true;
         videoCacheKey = "\u0000";
     }
 
@@ -2970,8 +2979,26 @@ public class HttpServer {
                     .append(",\"se\":").append(v.episode)
                     .append('}');
         }
-        sb.append("],\"scannedAt\":").append(videoCacheAt).append('}');
+        sb.append("],\"scannedAt\":").append(videoCacheAt)
+          .append(",\"complete\":").append(videoScanComplete).append('}');
         sendJson(out, sb.toString());
+    }
+
+    /**
+     * 分享树根节点的显示名。原来直接吐 /mnt/media_rw/<UUID> 的目录名，
+     * 一长串字母数字用户根本认不出哪个是插上的 U 盘；统一改成「U盘 · 前8位」。
+     * 只对卷根节点生效，U 盘里的子目录仍显示自己的名字。
+     */
+    private static String shareNodeName(File f) {
+        String p = f.getAbsolutePath();
+        String n = f.getName();
+        File parent = f.getParentFile();
+        String pp = parent == null ? "" : parent.getAbsolutePath();
+        if ("/storage/emulated".equals(pp) && "0".equals(n)) return "内部存储";
+        if (("/mnt/media_rw".equals(pp) || "/storage".equals(pp)) && !SysInfo.isInternal(f)) {
+            return "U盘 · " + (n.length() > 8 ? n.substring(0, 8) : n);
+        }
+        return n;
     }
 
     /** 目录给人的名字：内部存储 / 盘名 / 最后一段路径 */
@@ -3004,7 +3031,7 @@ public class HttpServer {
         String key = cfg.videoDirs == null ? "" : String.valueOf(cfg.videoDirs.hashCode());
         long now = System.currentTimeMillis();
         List<VideoItem> c = videoCache;
-        if (c != null && now - videoCacheAt < VIDEO_TTL_MS && key.equals(videoCacheKey)) return c;
+        if (c != null && now < videoCacheExpireAt && key.equals(videoCacheKey)) return c;
 
         List<VideoItem> out = new ArrayList<>();
         long deadline = now + VIDEO_SCAN_BUDGET_MS;
@@ -3028,8 +3055,14 @@ public class HttpServer {
             return a.name.compareToIgnoreCase(b.name);
         });
 
+        // 被预算/上限截断的结果只当「临时快照」：缓存 3 秒就让下次请求重扫。
+        // 旧逻辑把空快照按 60 秒缓存，用户看到的正是「明明有片子却说还没有影视」，
+        // 重启 App（清掉缓存）后才恢复。
+        boolean truncated = System.currentTimeMillis() > deadline || out.size() >= VIDEO_MAX_FILES;
+        videoScanComplete = !truncated;
         videoCache = out;
         videoCacheAt = now;
+        videoCacheExpireAt = now + (truncated ? 3000L : VIDEO_TTL_MS);
         videoCacheKey = key;
         return out;
     }
@@ -6482,7 +6515,7 @@ public class HttpServer {
             if (!first) sb.append(',');
             first = false;
             sb.append("{\"p\":\"").append(jsonEsc(f.getAbsolutePath())).append('"')
-              .append(",\"n\":\"").append(jsonEsc(f.getName())).append('"')
+              .append(",\"n\":\"").append(jsonEsc(shareNodeName(f))).append('"')
               .append(",\"d\":").append(isDir)
               .append(",\"s\":").append(isDir ? 0L : f.length()).append('}');
         }

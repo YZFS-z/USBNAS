@@ -45,6 +45,8 @@ public final class VideoLib {
         public boolean ok;
         public String error = "";
         public long scannedAt;
+        /** 服务端这次扫描是否完整；false 表示被时间预算截断，空列表不代表真的没片 */
+        public boolean scanComplete = true;
 
         public boolean isEmpty() {
             return videos.isEmpty();
@@ -82,6 +84,8 @@ public final class VideoLib {
             lib.ok = Boolean.TRUE.equals(m.get("ok"));
             Object sa = m.get("scannedAt");
             if (sa instanceof Number) lib.scannedAt = ((Number) sa).longValue();
+            Object cp = m.get("complete");
+            if (cp instanceof Boolean) lib.scanComplete = (Boolean) cp;
 
             parseGroups(m.get("dirs"), lib.roots, true);
             parseGroups(m.get("groups"), lib.groups, false);

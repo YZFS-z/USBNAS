@@ -121,6 +121,8 @@
     <!-- 404 单独说：文件被删/盘没挂上，和编码无关，别让用户去折腾播放器 -->
     <string name="video_gone">服务端找不到这个文件了（可能被删了，或者 U 盘没挂上）。</string>
     <string name="lib_empty_video">还没有影视。管理员在网页端「影视目录」里指一个目录就会出来。</string>
+    <!-- 影视目录已配好但扫描被时间预算截断时不能说「还没有影视」，那是两回事 -->
+    <string name="lib_video_scanning">正在扫描影视目录（U 盘冷启动会慢一些），马上就好…</string>
     <string name="lib_group_videos">%1$d 部</string>
     <string name="lib_group_other">其他</string>
     <string name="lib_empty_music">还没有音乐。管理员在网页端「音乐目录」里指一个目录就会出来。</string>
