@@ -2002,31 +2002,33 @@ class LibraryActivity : AppCompatActivity() {
     }
 
     /**
-     * 「分享管理」入口卡片。
+     * 「分享管理」卡片：直接把懒加载的文件/目录树内嵌进来，不再跳二级页面。
      *
-     * 服务端的 /_share/new|drop|list 早就有了，网页端也在用；这里给手机端一个
-     * 入口，做到三端同步 —— 生成短链后能直接用 ACTION_SEND 发出去。真实现全在
-     * [ShareActivity]，这一行只是导航，避免把大段 UI 塞进本页。
+     * 用户点「打开」进一个新页再点树，两次跳转太绕。现在管理设置页里就能
+     * 展开目录、点「分享」生成短链、列出/撤销已有分享。与网页端 /_share 用
+     * 同一套 /_share/tree|new|drop|list 端点，三端同步。
      */
     private fun shareCard(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(2), dp(16), dp(10))
         }
-        row.addView(TextView(this).apply {
+        box.addView(TextView(this).apply {
             text = "分享管理"
             textSize = 14f
             setTextColor(Palette.FG)
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            rightMargin = dp(8)
+            setPadding(0, 0, 0, dp(6))
         })
-        row.addView(Palette.outline(this, "打开").apply {
-            setOnClickListener {
-                startActivity(ShareActivity.intent(this@LibraryActivity, baseUrl, sid))
-            }
-        }, LinearLayout.LayoutParams(dp(80), dp(36)))
-        return row
+        if (baseUrl.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "先选中一台服务器"
+                textSize = 12f
+                setTextColor(Palette.FG2)
+            })
+        } else {
+            box.addView(ShareTreeView.build(this, baseUrl, sid))
+        }
+        return box
     }
 
     /**

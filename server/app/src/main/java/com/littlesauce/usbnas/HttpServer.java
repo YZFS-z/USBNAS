@@ -6243,7 +6243,8 @@ public class HttpServer {
      * 从请求路径里剥出分享码。
      *
      * <p>{@code /@AB7K3/browse/mnt/...} → {@code code="AB7K3"}，并把
-     * {@code req.path} 改写成 {@code /browse/mnt/...}。
+     * {@code req.path} 改写成 {@code /mnt/...}（{@code /browse} 前缀一并剥掉；
+     * 不剥的话 resolve() 拿到的是 {@code /browse/mnt/...}，一律找不到）。
      * 没带码就原样返回 null，路径不动。
      */
     private String takeShareCode(Request req) {
@@ -6258,8 +6259,22 @@ public class HttpServer {
         String rest = slash < 0 ? "/" : p.substring(slash);
         req.shareCode = code;
         req.path = rest;
+        // readRequest 里的 /browse 归一化发生在剥码之前，带码时它看到的是
+        // /@CODE/browse/...，那次没命中；这里剥完码必须再补一次，否则目录短链 404。
+        stripBrowsePrefix(req);
         req.headers.put("x-usbnas-share", code);
         return code;
+    }
+
+    /**
+     * 剥掉「路径形态目录浏览」的 /browse 前缀，剩下的是能直接给 resolve() 用的绝对路径。
+     * readRequest 和 takeShareCode 各调一次：后者剥掉 /@CODE 后 path 会重新变成
+     * /browse/...，不补这一下目录分享短链就是 404（文件分享 /view?f= 不受影响）。
+     */
+    private static void stripBrowsePrefix(Request r) {
+        if (r.path == null || !r.path.startsWith("/browse")) return;
+        String p = r.path.substring(7);
+        r.path = p.isEmpty() ? "/" : p;
     }
 
     /**
@@ -12100,12 +12115,8 @@ public class HttpServer {
                 r.params.computeIfAbsent(k, x -> new ArrayList<>()).add(v);
             }
         }
-        // /browse/xxx 是路径形态的目录浏览
-        if (r.path.startsWith("/browse")) {
-            String p = r.path.substring(7);
-            if (p.isEmpty()) p = "/";
-            r.path = p;
-        }
+        // /browse/xxx 是路径形态的目录浏览；带 /@CODE 时由 takeShareCode 剥码后再剥一次
+        stripBrowsePrefix(r);
         return r;
     }
 

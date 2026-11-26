@@ -65,6 +65,21 @@ public final class Share {
         public String error = "";
     }
 
+    /** 可分享树里的一个节点（目录或文件） */
+    public static final class Node {
+        public String path = "";
+        public String name = "";
+        public boolean dir;
+        public long size;
+    }
+
+    /** 树查询结果 */
+    public static final class TreeResult {
+        public boolean ok;
+        public String error = "";
+        public final List<Node> items = new ArrayList<>();
+    }
+
     private static volatile String lastError = "";
 
     /** 最近一次调用的错误原因（比 ok=false 更具体，便于 UI 显示） */
@@ -159,6 +174,59 @@ public final class Share {
                     it.url = nz(str(im.get("url")));
                     it.dir = isTrue(im.get("dir"));
                     r.items.add(it);
+                }
+            }
+            return r;
+        } catch (Throwable t) {
+            r.ok = false;
+            r.error = t.getClass().getSimpleName() + ": " + t.getMessage();
+            lastError = r.error;
+            return r;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /**
+     * 懒加载可分享树的一层：path 为空表示存储根，否则是某个目录的绝对路径。
+     * 服务端 /_share/tree?p=... → {"ok":true,"items":[{p,n,d,s}]}。
+     */
+    public static TreeResult tree(String baseUrl, String cookie, String path, int timeoutMs) {
+        TreeResult r = new TreeResult();
+        if (baseUrl == null || baseUrl.isEmpty()) {
+            r.error = "地址为空";
+            lastError = r.error;
+            return r;
+        }
+        String url = baseUrl + "/_share/tree"
+                + ((path == null || path.isEmpty()) ? "" : ("?p=" + Session.pct(path)));
+        HttpURLConnection c = null;
+        try {
+            c = Music.openPublic(url, cookie, timeoutMs);
+            String body = Music.readAllPublic(c.getInputStream(), 2 * 1024 * 1024);
+            Map<String, Object> m = Music.Json.parseObject(body);
+            if (m == null) {
+                r.error = "服务端返回的不是 JSON";
+                return r;
+            }
+            r.ok = isTrue(m.get("ok"));
+            if (!r.ok) {
+                String e = str(m.get("error"));
+                r.error = e == null || e.isEmpty() ? "读取目录失败" : e;
+                return r;
+            }
+            Object arr = m.get("items");
+            if (arr instanceof List) {
+                for (Object o : (List<?>) arr) {
+                    if (!(o instanceof Map)) continue;
+                    Map<?, ?> im = (Map<?, ?>) o;
+                    Node n = new Node();
+                    n.path = nz(str(im.get("p")));
+                    n.name = nz(str(im.get("n")));
+                    n.dir = isTrue(im.get("d"));
+                    Object sz = im.get("s");
+                    if (sz instanceof Number) n.size = ((Number) sz).longValue();
+                    r.items.add(n);
                 }
             }
             return r;
