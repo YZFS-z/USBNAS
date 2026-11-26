@@ -177,7 +177,7 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
 
         lyric = TextView(this).apply {
             setTextColor(Palette.DIM)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 21f)
             gravity = Gravity.CENTER
             setLineSpacing(dp(8).toFloat(), 1f)
             setPadding(dp(8), 0, dp(8), 0)
@@ -297,7 +297,10 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
 
         // ---- 竖屏：标题/副标题 + 唱片 + 歌词 + 进度 + 按钮，一路竖着排 ----
         // 这里只放 title/sub 两个竖屏专属控件；其余八个「会搬家」的由 attachOrientation 分发
-        portraitRow.addView(title)
+        portraitRow.addView(title, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(10)
+        })
         portraitRow.addView(sub)
 
         // ---- 横屏：左边整块只放唱片，右边从上到下是标题/歌词/进度/按钮 ----
@@ -307,7 +310,12 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 同一个 View 挂两个父容器会直接抛
         // IllegalStateException: The specified child already has a parent.
         // 只有纯文字的 titleL/subL 是横屏专属副本，一直留在 rightCol 里。
-        rightCol.addView(titleL)
+        // 标题往下压一点、按钮往上提一点：横屏右栏原本上标题贴顶、按钮贴底，
+        // 中间显得空。歌词放大后这两处收紧，视线自然落在中间。
+        rightCol.addView(titleL, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(28)
+        })
         rightCol.addView(subL)
 
         landscapeRow.addView(leftCol, LinearLayout.LayoutParams(0,
@@ -368,6 +376,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             lyricToolsCard to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(6)
+                // 横屏右栏：按钮从贴底往上收一点，别让标题和按钮之间空一大片
+                bottomMargin = dp(20)
             }
         )
         for ((v, lp) in movers) {
@@ -390,7 +400,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                     v === lyric -> LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply { topMargin = dp(12) }
                     v === lyricToolsCard -> LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(6) }
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply {
+                        topMargin = dp(6); bottomMargin = dp(12)
+                    }
                     else -> lp
                 }
                 portraitRow.addView(v, portraitLp)

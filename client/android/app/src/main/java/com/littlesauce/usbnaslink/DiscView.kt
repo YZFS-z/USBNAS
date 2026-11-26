@@ -130,8 +130,12 @@ class DiscView(ctx: Context) : View(ctx) {
     private val coverClip = Path()
     private val coverRect = RectF()
 
-    /** 背景色与贴纸配色都提到字段里：`Color.parseColor` 每帧调一次是纯浪费 */
-    private val bgColor = Color.parseColor("#0B0F14")
+    /**
+     * 唱片区的方形背景跟着 App 主题走：夜色还是原来的近黑，日间换成浅底，
+     * 免得白天整页是浅色、唯独唱片区一块黑方块。唱片本身（黑胶渐变、纹路、
+     * 唱针）保持原状，内圈照旧显示从歌曲文件提取的封面。
+     */
+    private val bgColor get() = Palette.BG
     private val labelHi = Color.parseColor("#1F5FC4")
     private val labelLo = Color.parseColor("#123A78")
     private val labelSub = Color.parseColor("#AFC3DC")
@@ -160,7 +164,7 @@ class DiscView(ctx: Context) : View(ctx) {
         strokeWidth = 2f
         color = Color.parseColor("#33E6E9EF")
     }
-    private val hole = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#0B0F14") }
+    private val hole = Paint(Paint.ANTI_ALIAS_FLAG)
     private val holeRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1.5f
@@ -423,6 +427,8 @@ class DiscView(ctx: Context) : View(ctx) {
         }
 
         // 轴孔：盖在封面中央，让它一眼还是「一张唱片」而不是「一个头像」
+        // 颜色跟着底色走，否则日间浅底上会留一个黑点。
+        hole.color = bgColor
         canvas.drawCircle(cx, cy, r * 0.045f, hole)
         canvas.drawCircle(cx, cy, r * 0.045f, holeRing)
 
