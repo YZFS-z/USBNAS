@@ -1924,15 +1924,32 @@ class LibraryActivity : AppCompatActivity() {
         // 静态说明，登录过期了也照样写着要登录，用户会以为按钮坏了。
         manageHost.addView(blockHeader(getString(R.string.set_server_section),
             getString(R.string.set_server_section_note)))
-        manageHost.addView(serverStatusCard())
-        manageHost.addView(nasSettingsCard())
-        manageHost.addView(accountsCard())
-        manageHost.addView(shareCard())
+        addManageCard(serverStatusCard())
+        addManageCard(nasSettingsCard())
+        addManageCard(accountsCard())
+        addManageCard(shareCard())
         manageHost.addView(blockHeader(getString(R.string.set_client_section),
             getString(R.string.set_client_section_note)))
-        manageHost.addView(languageCard())
-        manageHost.addView(ApkUpdater.settingsView(this))
+        addManageCard(languageCard())
+        addManageCard(ApkUpdater.settingsView(this))
         loadManage()
+    }
+
+    /**
+     * 管理设置里每个选项都套同一款圆角卡片，和「自动更新 / 存储 / 关于」一致。
+     * 之前只有客户端那三块有底，服务端那几块是裸文字贴在页面背景上，看着不像一回事。
+     */
+    private fun cardLook(v: View, left: Int = 16, top: Int = 14, right: Int = 16, bottom: Int = 14) {
+        v.setPadding(dp(left), dp(top), dp(right), dp(bottom))
+        v.background = Palette.round(this, Palette.CARD, 12f, Palette.LINE, 1f)
+    }
+
+    /** 卡片之间留 12dp，跟 ApkUpdater 里三张卡的间距一致。 */
+    private fun addManageCard(v: View) {
+        manageHost.addView(v, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(12)
+        })
     }
 
     /** 大板块标题：主色小字 + 粗体标题 + 一行说明 */
@@ -1989,8 +2006,8 @@ class LibraryActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(6), dp(12), dp(6))
         }
+        cardLook(row, 16, 12, 12, 12)
         serverStatusRow = Palette.note(this, getString(R.string.set_checking_login), Palette.DIM).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
@@ -2009,10 +2026,8 @@ class LibraryActivity : AppCompatActivity() {
      * 同一套 /_share/tree|new|drop|list 端点，三端同步。
      */
     private fun shareCard(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(2), dp(16), dp(10))
-        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cardLook(box)
         box.addView(TextView(this).apply {
             text = "分享管理"
             textSize = 14f
@@ -2042,10 +2057,8 @@ class LibraryActivity : AppCompatActivity() {
      * 注意 `which` 直接当选项序号用，不要再套 `2 - which` 之类的换算。
      */
     private fun languageCard(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(4), dp(16), dp(14))
-        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cardLook(box)
         box.addView(TextView(this).apply {
             text = getString(R.string.set_language)
             setTextColor(Palette.FG)
@@ -2099,9 +2112,10 @@ class LibraryActivity : AppCompatActivity() {
 
     private fun nasSettingsCard(): View {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cardLook(box, 0, 0, 0, 0)
         adminCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(4), dp(16), dp(20))
+            setPadding(dp(16), dp(14), dp(16), dp(20))
         }
         box.addView(adminCard)
         return box
@@ -2122,10 +2136,8 @@ class LibraryActivity : AppCompatActivity() {
      * 服务端判定，这里只把它的原话弹出来 —— 保护逻辑只有一份，改一处就够。
      */
     private fun accountsCard(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(4), dp(16), dp(18))
-        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cardLook(box, 16, 14, 16, 18)
         accountsBox = box
         return box
     }

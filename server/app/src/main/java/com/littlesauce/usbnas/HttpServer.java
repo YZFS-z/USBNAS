@@ -157,8 +157,14 @@ public class HttpServer {
                 int eq = part.indexOf('=');
                 if (eq <= 0) continue;
                 if (!part.substring(0, eq).trim().equals(COOKIE_NAME)) continue;
-                String name = owner.sessionGet(part.substring(eq + 1).trim());
-                return name == null ? null : snap.byName.get(name);
+                String tok = part.substring(eq + 1).trim();
+                String name = owner.sessionGet(tok);
+                if (name == null) return null;
+                // 记下这次请求用的 token 和来源 IP：在线设备数按 IP 去重，
+                // 同一台设备反复登录/调试产生的一堆 token 不该算成多台。
+                req.sessionToken = tok;
+                owner.sessionSeen(tok, req.remoteAddr);
+                return snap.byName.get(name);
             }
             return null;
         }
@@ -291,6 +297,12 @@ public class HttpServer {
      * 代价是手机改时间可能提前/延后过期，但一个一天有效的登录会话扛得住。
      */
     private final Map<String, Long> sessionExp = new ConcurrentHashMap<>();
+    /**
+     * token → 最近一次带它访问的来源 IP。只用于「在线设备数」按 IP 去重：
+     * 同一台设备每登录一次就多一个 token，但 IP 相同，只算一台。
+     * 纯内存、不落盘 —— 重启后第一次请求会重新填上，统计瞬时偏小无害。
+     */
+    private final Map<String, String> sessionIp = new ConcurrentHashMap<>();
     private final SecureRandom rng = new SecureRandom();
 
     /**
@@ -345,10 +357,13 @@ public class HttpServer {
         }
     }
 
-    private String sessionCreate(String user) {
+    private String sessionCreate(String user, String ip) {
         String tok = newToken();
         sessions.put(tok, user);
         sessionExp.put(tok, System.currentTimeMillis() + SESSION_TTL_MS);
+        // 登录这一下本身也来自某台设备，立刻记下来源 IP。否则只看后续请求的话，
+        // 连续 quick 登录几十次会攒出一堆「没有 IP」的 token，在线数照样虚高。
+        sessionSeen(tok, ip);
         persistSessions();
         return tok;
     }
@@ -366,7 +381,14 @@ public class HttpServer {
     private void sessionKill(String token) {
         boolean had = sessions.remove(token) != null;
         sessionExp.remove(token);
+        sessionIp.remove(token);
         if (had) persistSessions();
+    }
+
+    /** 记录这个 token 最近一次访问的来源 IP（在线设备数按 IP 去重用） */
+    private void sessionSeen(String token, String ip) {
+        if (token == null || token.isEmpty()) return;
+        sessionIp.put(token, ip == null ? "" : ip);
     }
 
     // ---- 跨端免登录的「交接票」 ----
@@ -1115,7 +1137,7 @@ public class HttpServer {
                 String p = form.containsKey("p") ? form.get("p") : "";
                 Users.User ok = cfg.users == null ? null : cfg.users.verify(u, p);
                 if (ok != null) {
-                    String token = sessionCreate(u);
+                    String token = sessionCreate(u, req.remoteAddr);
                     byte[] body = "已登录".getBytes(StandardCharsets.UTF_8);
                     // 表单里带了 back 就跳回去（匿名关闭时登完继续待在原目录）。
                     // 只放行站内相对路径：'//evil.com' 这种协议相对 URL 会把
@@ -1180,7 +1202,7 @@ public class HttpServer {
                     sendHtml(out, 401, renderLogin(u, "用户名或密码不对", "/"));
                     return;
                 }
-                String token = sessionCreate(u);
+                String token = sessionCreate(u, req.remoteAddr);
                 String back = req.param("back") == null ? "/" : req.param("back");
                 byte[] body = "已登录".getBytes(StandardCharsets.UTF_8);
                 StringBuilder sb = new StringBuilder();
@@ -1231,7 +1253,7 @@ public class HttpServer {
                 sendHtml(out, 401, renderLogin("", "这个免登录链接已经用过或已过期，请重新点一次", back));
                 return;
             }
-            String token = sessionCreate(user);
+            String token = sessionCreate(user, req.remoteAddr);
             byte[] body = "已登录".getBytes(StandardCharsets.UTF_8);
             StringBuilder sb = new StringBuilder();
             sb.append("HTTP/1.1 303 See Other\r\n");
@@ -10779,9 +10801,26 @@ public class HttpServer {
         return out;
     }
 
-    /** 某账号当前在线设备数 */
+    /**
+     * 某账号当前在线设备数：按来源 IP 去重，不是数 token。
+     *
+     * <p>每个 token 在 sessionCreate 时都会新建（网页登录一次、调试 quick 登录一次，
+     * 都会多一个），但一台设备往往对应好几个 token；直接数 token 会虚高（曾显示 29 台）。
+     * 同一 IP 只算一台；本机回环和还没有 IP 记录的旧 token 统一归到「这一台」，
+     * 升级后不会被历史会话继续顶成几十台。
+     */
     private int sessionCountOf(String user) {
-        return sessionTokensOf(user).size();
+        java.util.Set<String> devices = new java.util.HashSet<>();
+        for (String tok : sessionTokensOf(user)) {
+            devices.add(deviceKey(sessionIp.get(tok)));
+        }
+        return devices.size();
+    }
+
+    /** 本机/回环/还没记到 IP 的 token 统一算「这一台设备」，别每台旧会话都算一台 */
+    private String deviceKey(String ip) {
+        if (ip == null || ip.isEmpty() || ip.startsWith("127.") || ip.equals("::1")) return "local";
+        return ip;
     }
 
     /** 踢掉某账号的全部会话，返回踢掉的数量 */
@@ -12026,6 +12065,8 @@ public class HttpServer {
         final Map<String, List<String>> params = new HashMap<>();
         /** 对端地址，形如 127.0.0.1；/_login/quick 用它判是不是本机来的 */
         String remoteAddr = "";
+        /** 本次请求 Cookie 里的会话 token；由 Config.session() 回填，用于记「最后活跃 IP」 */
+        String sessionToken = "";
         /** 已登录用户；null 表示匿名 */
         Users.User user;
 
