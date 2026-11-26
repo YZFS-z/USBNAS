@@ -1,8 +1,11 @@
 package com.littlesauce.usbnaslink
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.view.KeyEvent
 import android.view.View
 import android.webkit.CookieManager
@@ -13,7 +16,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import java.net.URLDecoder
 
 /**
  * 用 WebView 打开 NAS 网页端。
@@ -173,6 +178,10 @@ class BrowseActivity : AppCompatActivity() {
                 loading.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
             }
         }
+        // 网页里的 `<a download>` 和「下载所选」都靠这一句落地。
+        // WebView 本身不处理下载：没有 DownloadListener 时点击会被直接吞掉，
+        // 页面上看起来就是「下载没反应」。
+        installDownloader()
 
         // 首屏地址：手上已经有 sid 就向服务端要一张一次性交接票，
         // 让 WebView 里的 Cookie 是服务端亲手种下的（走到 /_login/sso 后 303 跳回来），
@@ -189,6 +198,71 @@ class BrowseActivity : AppCompatActivity() {
             else -> handoffUrl() ?: themeUrl(baseUrl)
         }
         web.loadUrl(startUrl)
+    }
+
+    /**
+     * 把网页端的下载交给系统 DownloadManager。
+     *
+     * 为什么不用浏览器 Intent：WebView 和浏览器的 cookie 不共享，而服务端默认
+     * 可能要求登录；DownloadManager 可以手动带上当前 sid。它还会自己发通知、
+     * 落进系统「下载」目录，用户能直接看到进度和文件。
+     */
+    private fun installDownloader() {
+        web.setDownloadListener { url, userAgent, disposition, mimeType, _ ->
+            val name = nameFromDisposition(disposition)
+                ?: Uri.parse(url).lastPathSegment?.let { decodeName(it) }
+                ?: "download"
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setTitle(name)
+                setDescription(getString(R.string.browse_download_start, name))
+                if (!mimeType.isNullOrBlank()) setMimeType(mimeType)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setAllowedNetworkTypes(
+                    DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+                if (!userAgent.isNullOrBlank()) addRequestHeader("User-Agent", userAgent)
+                // 分享链接不需要登录，多带一个 cookie 也无害；需要登录的链接靠它放行。
+                prefs.sid?.takeIf { it.isNotEmpty() }?.let {
+                    addRequestHeader("Cookie", "${Session.COOKIE}=$it")
+                }
+            }
+            try {
+                val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                val id = dm.enqueue(request)
+                // 下载本身有系统通知，但 MIUI 上通知不一定弹出来；给一句即时反馈，
+                // 用户才知道刚才那一下确实点中了，而不是「没反应」。
+                Toast.makeText(this@BrowseActivity,
+                    getString(R.string.browse_download_start, name), Toast.LENGTH_SHORT).show()
+                android.util.Log.i("USBNASLink", "download $name -> id=$id")
+            } catch (t: Throwable) {
+                android.util.Log.e("USBNASLink", "enqueue download failed", t)
+            }
+        }
+    }
+
+    /** 服务端用的是 `filename*=UTF-8''...`，同时也兼容老式 `filename="..."` */
+    private fun nameFromDisposition(disposition: String?): String? {
+        if (disposition.isNullOrBlank()) return null
+        var i = disposition.indexOf("filename*=", ignoreCase = true)
+        if (i >= 0) {
+            var v = disposition.substring(i + 10).trim()
+            if (v.startsWith("UTF-8''", ignoreCase = true)) v = v.substring(7)
+            v = v.substringBefore(';').trim().trim('"')
+            if (v.isNotEmpty()) return decodeName(v)
+        }
+        i = disposition.indexOf("filename=", ignoreCase = true)
+        if (i >= 0) {
+            val v = disposition.substring(i + 9).trim()
+                .substringBefore(';').trim().trim('"')
+            if (v.isNotEmpty()) return decodeName(v)
+        }
+        return null
+    }
+
+    private fun decodeName(s: String): String = try {
+        URLDecoder.decode(s, "UTF-8")
+    } catch (t: Throwable) {
+        s
     }
 
     /** 登录表单的地址：`back` 由服务端拼进隐藏域，主题照旧拼在 query 上。 */

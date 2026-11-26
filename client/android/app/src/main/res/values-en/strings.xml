@@ -298,6 +298,7 @@
     <!-- ===== Embedded browser ===== -->
     <string name="browse_no_url">No NAS address available</string>
     <string name="browse_open_fail">Couldn\'t open %1$s\n%2$s</string>
+    <string name="browse_download_start">Downloading %1$s</string>
 
     <!-- ===== Folder tree ===== -->
     <string name="dirtree_hint">One folder per line, e.g.\n/storage/emulated/0/Music\n/mnt/media_rw/XXXX/Movies</string>

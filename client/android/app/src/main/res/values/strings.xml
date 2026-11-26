@@ -318,6 +318,7 @@
     <!-- ===== 内嵌网页 ===== -->
     <string name="browse_no_url">没有可用的 NAS 地址</string>
     <string name="browse_open_fail">打不开 %1$s\n%2$s</string>
+    <string name="browse_download_start">开始下载 %1$s</string>
 
     <!-- ===== 目录树 ===== -->
     <string name="dirtree_hint">一行一个目录，例如\n/storage/emulated/0/Music\n/mnt/media_rw/XXXX/Movies</string>

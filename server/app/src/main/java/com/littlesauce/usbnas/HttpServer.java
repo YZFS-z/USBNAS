@@ -936,6 +936,15 @@ public class HttpServer {
 
         if (req.user != null) return true;
 
+        // 带分享码时，路径形态的请求（/@CODE/browse/mnt/... 或直接文件 URL）
+        // 必须落在分享时绑定的目录/文件里。匿名读是「局域网里大家能看清单」，
+        // 分享是「我把这一份借给你」，两者不能互相抬高权限。
+        if (req.shareCode != null && req.path != null &&
+                (req.path.startsWith("/mnt/") || req.path.startsWith("/storage/"))) {
+            File scoped = resolve(req.path);
+            if (scoped == null || !shareCovers(req, scoped)) return false;
+        }
+
         boolean readMethod = "GET".equals(req.method) || "HEAD".equals(req.method)
                 || "OPTIONS".equals(req.method) || "PROPFIND".equals(req.method);
 
@@ -963,9 +972,10 @@ public class HttpServer {
         if (f == null || !f.isFile()) return false;
         if (!cfg.hasAccounts()) return false;
         if (req != null && req.user != null) return false;
-        // 聊胜于无的一刀：连分享码都不带的人，别往下走扩展名判断了。
-        // 真正的放行判定在 shareCovers()，它比对的是「命中的那条分享覆盖不覆盖 f」。
-        if (req != null && shareCovers(req, f)) return false;
+        // 带分享码的请求只允许取这条分享覆盖到的东西。不能因为服务端开了
+        // 匿名读，就把「改一下 f= 就能听别的歌」当成正常 —— 分享是一把作用域
+        // 被钉死的临时钥匙，必须比匿名读更严，不是更松。
+        if (req != null && req.shareCode != null) return !shareCovers(req, f);
         if (!cfg.anonymousRead) return true; // 关掉了匿名读：所有内容都要登录
         String name = f.getName();
         int dot = name.lastIndexOf('.');
@@ -1320,10 +1330,24 @@ public class HttpServer {
             return;
         }
 
-        // 文档预览页（PDF / Office / 文本）
+        // 预览页。历史上 /view 只走文档页，文件分享链接却统一用 /view?f=...，
+        // 于是 mp3 被当成「浏览器不认识的格式」。这里按扩展名分流，并且
+        // 带分享码时一律以分享时绑定的文件为准 —— f=1 只是个占位符，
+        // 用户改不成别的路径（否则等于拿一条分享撬开整块匿名可读的盘）。
         if (path.equals("/view")) {
             String p = req.param("f");
-            sendHtml(out, renderDoc(req, p));
+            if (req.shareCode != null) {
+                String target = shareTarget(req);
+                if (target != null && new File(target).isFile()) p = target;
+            }
+            String ext = extOf(p == null ? "" : p);
+            if (BROWSER_AUDIO.contains(ext)) {
+                sendHtml(out, renderMusic(req, p));
+            } else if (BROWSER_VIDEO.contains(ext)) {
+                sendHtml(out, renderVideo(req, p));
+            } else {
+                sendHtml(out, renderDoc(req, p));
+            }
             return;
         }
 
@@ -6404,9 +6428,10 @@ public class HttpServer {
         shares.put(code, canonical(f));
         String rel = withShare(req, f.isDirectory() ? "/browse" + f.getAbsolutePath()
                 : "/view?f=" + encode(f.getAbsolutePath()));
+        // 文件分享短到极致：f=1 只是占位，服务端按分享码反查当时绑定的文件；
+        // 目录分享仍要带真实路径，否则用户没法继续往子目录里点。
         String link = baseUrlFor(req) + SHARE_PREFIX + code
-                + (f.isDirectory() ? "/browse" + f.getAbsolutePath()
-                : "/view?f=" + encode(f.getAbsolutePath()));
+                + (f.isDirectory() ? "/browse" + f.getAbsolutePath() : "/view?f=1");
         StringBuilder sb = new StringBuilder();
         sb.append("{\"ok\":true,\"code\":\"").append(jsonEsc(code)).append('"');
         sb.append(",\"path\":\"").append(jsonEsc(f.getAbsolutePath())).append('"');
@@ -6961,6 +6986,12 @@ public class HttpServer {
      */
     private String shareButton(String absPath, String back) {
         return rowActButton("sh", svgIcon("share", "svgi-act"), "分享（免登录短链）", absPath, back);
+    }
+
+    /** 更多操作（▼）：点一下把重命名/移动/分享/下载这一小组展开或收起 */
+    private String moreButton() {
+        return "<button type='button' class='more' title='更多操作'"
+                + " aria-expanded='false'>▼</button>";
     }
 
     private String rowActButton(String kind, String glyph, String title,
@@ -7684,6 +7715,10 @@ public class HttpServer {
                     sb.append("<a class='act eye' href='/view?f=").append(encode(full))
                             .append("' title='预览'>").append(svgIcon("eye", "svgi-act")).append("</a>");
                 }
+                // 下载 / 重命名 / 移动 / 分享收进同一个折叠组，默认不占位置；
+                // 播放/预览和删除仍直接露在外面 —— 前者是高频，后者是危险操作，
+                // 都不该藏在箭头后面。
+                sb.append("<span class='moreacts'>");
                 sb.append("<a class='act dl' href='").append(enc)
                         .append("' download title='下载'>").append(svgIcon("download", "svgi-act")).append("</a>");
                 if (writeAllowed && Users.inScope(req.user, f) && !isRootItself(f)) {
@@ -7698,6 +7733,7 @@ public class HttpServer {
                 if (writeAllowed && Users.inScope(req.user, f)) {
                     sb.append(shareButton(full, backTo(dir)));
                 }
+                sb.append("</span>").append(moreButton());
                 if (delAllowed && Users.inScope(req.user, f)) {
                     sb.append(delButton(full, backTo(dir)));
                 }
@@ -7705,16 +7741,22 @@ public class HttpServer {
             } else if (writeAllowed && Users.inScope(req.user, f) && !isRootItself(f)) {
                 // 目录也能改名和搬走（搬之前服务端会检查不能搬进自己里）
                 sb.append("<span class='acts'>")
+                        .append("<span class='moreacts'>")
                         .append(renameButton(full, backTo(dir)))
                         .append(moveButton(full, backTo(dir)))
                         .append(shareButton(full, backTo(dir)))
+                        .append("</span>")
+                        .append(moreButton())
                         .append(delAllowed ? delButton(full, backTo(dir)) : "")
                         .append("</span>");
             } else if (writeAllowed && Users.inScope(req.user, f)) {
                 // 共享根本身：不能改名/搬走/删，但「整块盘给局域网临时开个口」
                 // 恰恰是最常见的分享诉求，所以给它留着。
                 sb.append("<span class='acts'>")
+                        .append("<span class='moreacts'>")
                         .append(shareButton(full, backTo(dir)))
+                        .append("</span>")
+                        .append(moreButton())
                         .append("</span>");
             } else if (delAllowed && Users.inScope(req.user, f)) {
                 // 目录也能删，但要求目录是空的，否则 confirm 会提示先清空
@@ -7779,6 +7821,8 @@ public class HttpServer {
             // 结果就是目录页的「分享」按钮点了没反应。
             sb.append(SHARE_JS);
         }
+        // ▼ 折叠脚本跟权限无关：只读用户也有「下载」需要展开，必须无条件注入。
+        sb.append(MOREACT_JS);
         htmlFoot(sb);
         return sb.toString();
     }
@@ -7787,7 +7831,9 @@ public class HttpServer {
         File f = resolve(pathParam);
         if (f == null || !f.isFile()) return errorPage("找不到音频文件: " + pathParam);
 
-        String enc = encode(f.getAbsolutePath());
+        // 分享页里的音频/歌词/上一首下一首都得继续带着分享码，
+        // 否则浏览器会拿裸路径去取文件，被 needLoginForFile 判成越权。
+        String enc = withShare(req, encode(f.getAbsolutePath()));
         String name = f.getName();
         String mime = mimeOf(name);
         String encJson = jsonEsc(f.getAbsolutePath());
@@ -7798,8 +7844,9 @@ public class HttpServer {
         sb.append("<nav class='crumbs'><a href='/'>").append(svgIcon("home", "svgi-crumb")).append("</a>");
         File parent = f.getParentFile();
         if (parent != null) {
-            sb.append("<span class='sep'>›</span><a href='/browse")
-                    .append(encode(parent.getAbsolutePath())).append("'>")
+            sb.append("<span class='sep'>›</span><a href='")
+                    .append(withShare(req, "/browse" + encode(parent.getAbsolutePath())))
+                    .append("'>")
                     .append(esc(parent.getName())).append("</a>");
         }
         sb.append("</nav>\n");
@@ -7832,8 +7879,10 @@ public class HttpServer {
                 });
                 for (int i = 0; i < auds.size(); i++) {
                     if (!auds.get(i).getAbsolutePath().equals(f.getAbsolutePath())) continue;
-                    if (i > 0) prevUrl = "/view?f=" + encode(auds.get(i - 1).getAbsolutePath());
-                    if (i < auds.size() - 1) nextUrl = "/view?f=" + encode(auds.get(i + 1).getAbsolutePath());
+                    if (i > 0) prevUrl = withShare(req,
+                            "/view?f=" + encode(auds.get(i - 1).getAbsolutePath()));
+                    if (i < auds.size() - 1) nextUrl = withShare(req,
+                            "/view?f=" + encode(auds.get(i + 1).getAbsolutePath()));
                     break;
                 }
             }
@@ -8886,6 +8935,8 @@ public class HttpServer {
                     + "body.light .svgi-cov{color:#0b64c8}"
                     + "body.light .acts a{background:#f0f2f5;color:#0b64c8}"
                     + "body.light .acts a:hover{background:#e3edfa}"
+                    + "body.light .acts button.more{background:#f0f2f5;color:#0b64c8}"
+                    + "body.light .acts button.more:hover{background:#e3edfa;color:#084a94}"
                     + "body.light .rowact{background:#f0f2f5;color:#0b64c8}"
                     + "body.light .rowact:hover{background:#e3edfa;color:#084a94}"
                     + "body.light .rowact.mv:hover{background:#e6f4ea;color:#1a7f37}"
@@ -9029,6 +9080,8 @@ public class HttpServer {
                     + "body.ink .svgi-cov{color:#3a3a3a}"
                     + "body.ink .acts a{background:#d6d6d6;color:#3a3a3a}"
                     + "body.ink .acts a:hover{background:#c6c6c6}"
+                    + "body.ink .acts button.more{background:#d6d6d6;color:#3a3a3a}"
+                    + "body.ink .acts button.more:hover{background:#c6c6c6;color:#1a1a1a}"
                     + "body.ink .rowact{background:#d6d6d6;color:#3a3a3a}"
                     + "body.ink .rowact:hover{background:#b8b8b8;color:#1a1a1a}"
                     // ---- 身份栏（用户名 + 等级徽章）----
@@ -9175,6 +9228,15 @@ public class HttpServer {
                     + "display:inline-flex;align-items:center;justify-content:center}"
                     + ".acts a:hover{background:#243040}"
                     + ".acts a.act .svgi-act{color:inherit}"
+                    // 低频操作（下载/重命名/移动/分享）默认收起，点 ▼ 才展开。
+                    // 用 display 而不是 visibility：收起时不占位，文件名能长一点。
+                    + ".moreacts{display:none;gap:6px}"
+                    + ".moreacts.on{display:flex}"
+                    + ".acts button.more{font:inherit;font-size:15px;line-height:1;"
+                    + "padding:4px 7px;border-radius:6px;border:0;cursor:pointer;"
+                    + "background:#1b222c;color:#8ec5ff;flex-shrink:0;"
+                    + "display:inline-flex;align-items:center;justify-content:center}"
+                    + ".acts button.more:hover{background:#243040;color:#cfe4ff}"
                     + ".delf{margin:0;display:inline}"
                     + ".rowact{font:inherit;font-size:15px;line-height:1;"
                     + "padding:4px 7px;border-radius:6px;border:0;cursor:pointer;"
@@ -10328,6 +10390,26 @@ public class HttpServer {
                     + "    location.href='/zip?'+q.join('&');\n"
                     + "  });}\n"
                     + "  sync();\n"
+                    + "})();\n"
+                    + "</script>\n";
+
+    /** ▼ 按钮：展开/收起同行的下载、重命名、移动、分享四个低频操作 */
+    private static final String MOREACT_JS =
+            "<script>\n"
+                    + "(function(){\n"
+                    + "  document.addEventListener('click',function(e){\n"
+                    + "    var t=e.target;\n"
+                    + "    while(t&&t!==document&&!(t.classList&&t.classList.contains('more')))"
+                    + "t=t.parentNode;\n"
+                    + "    if(!t||t===document)return;\n"
+                    + "    e.preventDefault();e.stopPropagation();\n"
+                    + "    var box=t.parentNode.querySelector('.moreacts');\n"
+                    + "    if(!box)return;\n"
+                    + "    var on=!box.classList.contains('on');\n"
+                    + "    if(on)box.classList.add('on');else box.classList.remove('on');\n"
+                    + "    t.textContent=on?'▲':'▼';\n"
+                    + "    t.setAttribute('aria-expanded',on?'true':'false');\n"
+                    + "  },true);\n"
                     + "})();\n"
                     + "</script>\n";
 
