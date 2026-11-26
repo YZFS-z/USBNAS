@@ -33,6 +33,15 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         const val EXTRA_COVERS = "covers"
         const val EXTRA_EMBEDS = "embeds"
         const val EXTRA_START = "start"
+
+        // 图标按钮用可着色的 Unicode 字形，不用彩色 emoji —— 这样日夜主题换的是 Palette.FG，
+        // 图标自动跟着变深/变浅，不会在白天留一个always-black 的符号。
+        private const val GLYPH_PLAY = "▶"
+        // ⏸ 在 MIUI 上即便加 FE0E 也会被 emoji 字体画成橙色，不跟 Palette.FG 换色；
+        // 用纯文本的双竖线才算真的「图标 + 日夜适配」。
+        private const val GLYPH_PAUSE = "‖"
+        private const val GLYPH_PREV = "\u23EE\uFE0E"
+        private const val GLYPH_NEXT = "\u23ED\uFE0E"
     }
 
     private lateinit var player: Player
@@ -53,6 +62,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     /** 上一次按标题拉过封面的歌曲路径，避免每 200ms 的回调重复起线程 */
     private var coverFor: String? = null
     private lateinit var lyric: TextView
+    /** 当前句与下一句歌词文本（分开存，两个回调谁先到都能正确重画） */
+    private var curLyricText: String? = null
+    private var nextLyricText: String? = null
     private lateinit var timeText: TextView
     private lateinit var bar: SeekBar
     private lateinit var playBtn: Button
@@ -61,8 +73,11 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     private lateinit var overlayBtn: Button
     /** 刮削歌词 + 桌面歌词 + 歌词位移，统一装在这一张圆角卡片里 */
     private lateinit var lyricToolsCard: LinearLayout
-    /** 歌词位移控制行：提前 / 当前偏移标签 / 延后 / 归零 */
-    private lateinit var offsetRow: LinearLayout
+    /** 收起态：刮削歌词 / 桌面歌词 / ▼ */
+    private lateinit var toolsRow: LinearLayout
+    private lateinit var lyricsExpandBtn: Button
+    /** 展开态：调整歌词时间： / −0.5s / 位移 / +0.5s / 取消 */
+    private lateinit var adjustRow: LinearLayout
     private lateinit var offsetLabel: TextView
 
     /** 顶部转圈的黑胶；进度、播放态、歌名都在 Listener 回调里喂给它 */
@@ -197,78 +212,87 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             setPadding(0, dp(2), 0, dp(10))
         }
 
-        val ctl = LinearLayout(this).apply {
+        // 一行按钮：播放模式/上一首/播放暂停/下一首改成图标，和
+        // 刮削歌词/桌面歌词/▼ 并排。原来两行合成一行，省出来的一行高度留给歌词。
+        toolsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        modeBtn = ctlButton(modeLabel()) {
+        modeBtn = ctlIcon(modeGlyph(), modeLabel()) {
             player.playlist.mode = player.playlist.mode.next()
-            modeBtn.text = modeLabel()
+            modeBtn.text = modeGlyph()
+            modeBtn.contentDescription = modeLabel()
         }
-        val prev = ctlButton(getString(R.string.play_prev)) { goSwitch(true) }
-        playBtn = ctlButton(getString(R.string.play_play)) { player.toggle() }
-        val next = ctlButton(getString(R.string.play_next)) { goSwitch(false) }
+        val prev = ctlIcon(GLYPH_PREV, getString(R.string.play_prev)) { goSwitch(true) }
+        playBtn = ctlIcon(GLYPH_PLAY, getString(R.string.play_play)) { player.toggle() }
+        val next = ctlIcon(GLYPH_NEXT, getString(R.string.play_next)) { goSwitch(false) }
         for (b in listOf(modeBtn, prev, playBtn, next)) {
-            ctl.addView(b, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
-                marginStart = dp(4); marginEnd = dp(4)
+            toolsRow.addView(b, LinearLayout.LayoutParams(0, dp(40), 0.5f).apply {
+                marginStart = dp(3); marginEnd = dp(3); topMargin = dp(2)
             })
-        }
-
-        // 第二排只放两个「附加功能」，不跟播放控制挤一排行：
-        // 四个播放键是高频操作，塞进六个别扭的小按钮反而不好按
-        val tools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
         }
         scrapeBtn = ctlButton(getString(R.string.play_scrape)) { askScrape() }
         overlayBtn = ctlButton(getString(R.string.play_overlay_on)) { toggleOverlay() }
-        tools.addView(scrapeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(2)
+        lyricsExpandBtn = ctlButton(getString(R.string.play_lyrics_expand)) { showLyricsAdjust(true) }
+        toolsRow.addView(scrapeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+            marginStart = dp(3); marginEnd = dp(3); topMargin = dp(2)
         })
-        tools.addView(overlayBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(2)
+        toolsRow.addView(overlayBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+            marginStart = dp(3); marginEnd = dp(3); topMargin = dp(2)
+        })
+        toolsRow.addView(lyricsExpandBtn, LinearLayout.LayoutParams(dp(48), dp(40)).apply {
+            marginStart = dp(3); marginEnd = dp(3); topMargin = dp(2)
         })
 
-        // 第三排：歌词时间位移。音词对不上时用户自己 ±0.5s 微调，
-        // 和桌面端 PlayerWindow/手机悬浮窗共用同一个 Player.lyricOffsetMs。
-        offsetRow = LinearLayout(this).apply {
+        // 展开态：调整歌词时间： / −0.5s / 位移 / +0.5s / 取消。
+        // 与桌面端 PlayerWindow / 悬浮窗共用 Player.lyricOffsetMs，点取消只收起面板、不归零。
+        adjustRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            visibility = View.GONE
         }
-        val earlierBtn = ctlButton(getString(R.string.play_lyric_earlier)) { nudgeLyric(-500) }
+        adjustRow.addView(TextView(this).apply {
+            text = getString(R.string.play_lyric_adjust_title)
+            setTextColor(Palette.FG2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setSingleLine(true)
+        }, LinearLayout.LayoutParams(0, dp(38), 1.25f).apply {
+            marginStart = dp(4); marginEnd = dp(2); topMargin = dp(4)
+        })
+        val earlierBtn = ctlButton(getString(R.string.play_lyric_minus)) { nudgeLyric(-500) }
         offsetLabel = TextView(this).apply {
             setTextColor(Palette.FG2)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             gravity = Gravity.CENTER
-            minWidth = dp(72)
+            setSingleLine(true)
+            minWidth = dp(52)
         }
-        val laterBtn = ctlButton(getString(R.string.play_lyric_later)) { nudgeLyric(500) }
-        val resetBtn = ctlButton(getString(R.string.play_lyric_offset_reset)) { nudgeLyric(0, reset = true) }
-        offsetRow.addView(earlierBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
+        val laterBtn = ctlButton(getString(R.string.play_lyric_plus)) { nudgeLyric(500) }
+        val cancelBtn = ctlButton(getString(R.string.play_lyric_cancel)) { showLyricsAdjust(false) }
+        adjustRow.addView(earlierBtn, LinearLayout.LayoutParams(0, dp(38), 0.8f).apply {
+            marginStart = dp(2); marginEnd = dp(2); topMargin = dp(4)
         })
-        offsetRow.addView(offsetLabel, LinearLayout.LayoutParams(0, dp(38), 0.9f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
+        adjustRow.addView(offsetLabel, LinearLayout.LayoutParams(0, dp(38), 0.9f).apply {
+            marginStart = dp(2); marginEnd = dp(2); topMargin = dp(4)
         })
-        offsetRow.addView(laterBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
+        adjustRow.addView(laterBtn, LinearLayout.LayoutParams(0, dp(38), 0.8f).apply {
+            marginStart = dp(2); marginEnd = dp(2); topMargin = dp(4)
         })
-        offsetRow.addView(resetBtn, LinearLayout.LayoutParams(0, dp(38), 0.7f).apply {
-            marginStart = dp(4); marginEnd = dp(4); topMargin = dp(4)
+        adjustRow.addView(cancelBtn, LinearLayout.LayoutParams(0, dp(38), 0.75f).apply {
+            marginStart = dp(2); marginEnd = dp(4); topMargin = dp(4)
         })
         updateOffsetLabel()
 
-        // 刮削歌词 / 桌面歌词 / 位移微调合成一张圆角卡片：原来三排是散在
-        // 页面背景上的裸按钮，看起来像三个不相干的功能；收进同一张卡里，
-        // 横竖屏换父容器时也只要搬这一块。
+        // 刮削歌词 / 桌面歌词 / 歌词时间微调共用同一张圆角卡片；
+        // 收起和展开都只占一行的高度，横竖屏换父容器时只要搬这一块。
         lyricToolsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(2), dp(6), dp(2))
             background = Palette.round(this@PlayerActivity, Palette.CARD, 12f, Palette.LINE, 1f)
         }
-        lyricToolsCard.addView(tools, LinearLayout.LayoutParams(
+        lyricToolsCard.addView(toolsRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        lyricToolsCard.addView(offsetRow, LinearLayout.LayoutParams(
+        lyricToolsCard.addView(adjustRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ---- 竖屏：标题/副标题 + 唱片 + 歌词 + 进度 + 按钮，一路竖着排 ----
@@ -305,7 +329,6 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         // 去重判断，而这里 isLandscape 还停在初始值 false —— 竖屏启动时会被整段跳过，
         // 结果 disc/lyric/按钮一个都没挂上去（实测表现为 DiscView 0,0-0,0、整页空白）
         hintView = hint
-        ctlView = ctl
         isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         attachOrientation(isLandscape)
         portraitRow.visibility = if (isLandscape) View.GONE else View.VISIBLE
@@ -322,17 +345,15 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     /**
      * 把「会搬家」的控件挂到当前姿态该去的父容器里。
      *
-     * disc/lyric/timeText/bar/hint/ctl/lyricToolsCard 这些控件两种姿态都要用，
+     * disc/lyric/timeText/bar/hint/lyricToolsCard 这些控件两种姿态都要用，
      * 但一个 View 只能有一个父容器，所以换姿态时只能真的挪（先 removeView 再 addView）。
      * 挪之前记下它在竖屏里的期望高度/权重，挪之后重新下发 LayoutParams：
      * disc 竖屏是 height=0+weight，横屏是 match_parent×match_parent+weight=1。
      */
     private var hintView: TextView? = null
-    private var ctlView: LinearLayout? = null
 
     private fun attachOrientation(landscape: Boolean) {
         val hint = hintView ?: return
-        val ctl = ctlView ?: return
         val movers = listOf<Pair<android.view.View, LinearLayout.LayoutParams>>(
             disc to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.15f).apply { topMargin = dp(10) },
@@ -343,8 +364,6 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
             bar to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
             hint to LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
-            ctl to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
             lyricToolsCard to LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -362,17 +381,16 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
                     rightCol.addView(v, lp)
                 }
             } else {
-                // 竖屏高度只有 2400，disc(1.15) + lyric(1f) 两个权重把剩余空间吃光，
-                // 后面 WRAP_CONTENT 的 offsetRow 会被 AT_MOST 压到 0 高（真机 dump 里
-                // 「歌词提前/延后/归零」整排消失，用户根本点不到）。竖屏这里手动降权，
-                // 并给位移排一个 EXACTLY 的高度，保证它不会被挤掉。
+                // 播放控制并进歌词工具卡后只剩一行按钮，竖屏这里把歌词权重从 0.8
+                // 提到 1.0（和唱片持平），多出来的高度正好多显示一句「还没唱到」的歌词。
+                // 工具卡仍给 EXACTLY 高度，防止被权重挤到 0。
                 val portraitLp = when {
                     v === disc -> LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply { topMargin = dp(10) }
                     v === lyric -> LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.8f).apply { topMargin = dp(12) }
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply { topMargin = dp(12) }
                     v === lyricToolsCard -> LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(100)).apply { topMargin = dp(6) }
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(6) }
                     else -> lp
                 }
                 portraitRow.addView(v, portraitLp)
@@ -478,6 +496,34 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         Music.Mode.SHUFFLE -> getString(R.string.play_mode_shuffle)
     }
 
+    /**
+     * 图标按钮：字形用 Palette.FG 着色，背景用 Palette.BTN，
+     * 所以切到日间主题时不用重建布局也会跟着换色（ThemeCtl 换肤走同一套 Palette）。
+     */
+    private fun ctlIcon(glyph: String, desc: String, onClick: () -> Unit) = Button(this).apply {
+        text = glyph
+        contentDescription = desc
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        setTextColor(Palette.FG)
+        backgroundTintList = null
+        stateListAnimator = null
+        minWidth = 0
+        minimumWidth = 0
+        minHeight = 0
+        minimumHeight = 0
+        background = Palette.round(this@PlayerActivity, Palette.BTN, 9f)
+        setOnClickListener { onClick() }
+    }
+
+    /** 播放模式的图形记号；文字语义仍放在 contentDescription 里 */
+    private fun modeGlyph(): String = when (player.playlist.mode) {
+        Music.Mode.SEQUENTIAL -> "⇥"
+        Music.Mode.LOOP_ALL -> "↻"
+        Music.Mode.LOOP_ONE -> "1↻"
+        Music.Mode.SHUFFLE -> "⤨"
+    }
+
     private fun ctlButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         isAllCaps = false
@@ -525,7 +571,9 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         sub.text = track.dir
         titleL.text = t
         subL.text = track.dir
-        lyric.text = "♪"
+        curLyricText = null
+        nextLyricText = null
+        renderLyric()
         disc.setTitle(t, track.artist().ifEmpty { "" })
         disc.setProgress(0L, 1L)
         // 注意：这里不要 setSpinning(false)。切歌动画里唱针正抬着，落针由 DiscView 在
@@ -615,7 +663,8 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     }
 
     override fun onState(playing: Boolean) {
-        playBtn.text = if (playing) getString(R.string.play_pause) else getString(R.string.play_play)
+        playBtn.text = if (playing) GLYPH_PAUSE else GLYPH_PLAY
+        playBtn.contentDescription = getString(if (playing) R.string.play_pause else R.string.play_play)
         disc.setSpinning(playing)
     }
 
@@ -631,12 +680,68 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
     }
 
     override fun onLyric(text: String?) {
-        lyric.text = text ?: "♪"
+        curLyricText = text
+        renderLyric()
+    }
+
+    override fun onNextLyric(text: String?) {
+        nextLyricText = text
+        renderLyric()
+    }
+
+    /**
+     * 当前句 + 下一句一起显示。下一句用更暗更小的字，视觉上是「预告」而不是正文；
+     * 两行按钮并成一行后腾出来的高度正好给它。
+     */
+    private fun renderLyric() {
+        if (!::lyric.isInitialized) return
+        val cur = curLyricText ?: "♪"
+        val next = nextLyricText
+        if (next.isNullOrEmpty()) {
+            lyric.text = cur
+            return
+        }
+        val sb = android.text.SpannableStringBuilder()
+        sb.append(cur).append('\n').append(next)
+        val from = cur.length + 1
+        sb.setSpan(android.text.style.ForegroundColorSpan(Palette.FAINT),
+            from, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        sb.setSpan(android.text.style.RelativeSizeSpan(0.72f),
+            from, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        lyric.text = sb
     }
 
     override fun onEnded() {
-        playBtn.text = getString(R.string.play_play)
+        playBtn.text = GLYPH_PLAY
+        playBtn.contentDescription = getString(R.string.play_play)
         disc.setSpinning(false)
+    }
+
+    /**
+     * 一首歌自然播完自动切下一首，也走和手动点「下一首」一样的甩盘动画。
+     * Player 在 completion 里把真正的切换动作包成 advance 交过来；这里先让
+     * 唱片滑出去，到位了才执行 advance（换曲、onTrack 刷新）。
+     * 万一上一次动画还没结束（切歌动画期间播完这种极短曲），spinSwitch 会直接忽略，
+     * 此时必须自己调 advance，否则歌就卡在播完那一首不动了。
+     */
+    override fun onAutoAdvance(advance: () -> Unit) {
+        android.util.Log.i("USBNASLink", "auto advance -> disc switch")
+        if (!::disc.isInitialized || disc.isSwitching()) {
+            advance()
+            return
+        }
+        disc.spinSwitch(false) { advance() }
+    }
+
+    /**
+     * 圆角卡片里两行二选一：收起时是「刮削歌词 / 桌面歌词 / ▼」，
+     * 点箭头换成「调整歌词时间： / −0.5s / 位移 / +0.5s / 取消」。
+     * 取消只收面板，不动已经调好的 offset —— 归零是另一件事，别把用户调的值偷偷抹掉。
+     */
+    private fun showLyricsAdjust(show: Boolean) {
+        if (!::toolsRow.isInitialized || !::adjustRow.isInitialized) return
+        toolsRow.visibility = if (show) View.GONE else View.VISIBLE
+        adjustRow.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     /** 位移按钮：delta 毫秒；reset=true 时归零。改完刷标签，浮窗下一 tick 自动同步。 */

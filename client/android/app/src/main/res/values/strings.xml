@@ -259,8 +259,13 @@
     <string name="play_overlay_perm_how">请在系统设置 → 应用 → 特殊权限里打开悬浮窗</string>
     <string name="play_overlay_failed">浮窗打不开（权限被拒或系统限制）</string>
 
-    <!-- ===== 歌词时间位移（音词时间对不上时手动微调） ===== -->
-    <string name="play_lyric_offset">歌词位移 %1$s</string>
+    <!-- ===== 歌词时间位移（默认收在 ▼ 里，点开才露出来） ===== -->
+    <string name="play_lyrics_expand">▼</string>
+    <string name="play_lyric_adjust_title">调整歌词时间：</string>
+    <string name="play_lyric_minus">−0.5s</string>
+    <string name="play_lyric_offset">位移 %1$s</string>
+    <string name="play_lyric_plus">+0.5s</string>
+    <string name="play_lyric_cancel">取消</string>
     <string name="play_lyric_earlier">歌词提前 −0.5s</string>
     <string name="play_lyric_later">歌词延后 +0.5s</string>
     <string name="play_lyric_offset_reset">归零</string>

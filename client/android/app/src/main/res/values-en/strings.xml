@@ -243,6 +243,14 @@
     <string name="play_overlay_perm_how">Turn on the overlay permission in Settings → Apps → Special access</string>
     <string name="play_overlay_failed">Couldn\'t show the overlay (permission denied or blocked by the system)</string>
 
+    <!-- ===== Lyric time offset (collapsed behind the ▼ button) ===== -->
+    <string name="play_lyrics_expand">▼</string>
+    <string name="play_lyric_adjust_title">Lyric offset:</string>
+    <string name="play_lyric_minus">−0.5s</string>
+    <string name="play_lyric_offset">Offset %1$s</string>
+    <string name="play_lyric_plus">+0.5s</string>
+    <string name="play_lyric_cancel">Cancel</string>
+
     <!-- ===== Theme button ===== -->
     <string name="theme_switched">Switched to %1$s (synced to all devices)</string>
     <string name="theme_switched_fail">Switched to %1$s · the server didn\'t save it: %2$s</string>

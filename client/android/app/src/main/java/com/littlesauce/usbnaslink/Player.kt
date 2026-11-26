@@ -30,7 +30,22 @@ class Player(private val ctx: Context) {
 
         fun onLyric(text: String?)
 
+        /** 即将唱到的下一句；播放页拿它多显示一行，让玩家能提前看到词 */
+        fun onNextLyric(text: String?) {
+            // 默认空实现：老调用方不用改
+        }
+
         fun onEnded()
+
+        /**
+         * 一首自然播完、马上要自动切下一首时的回调。
+         *
+         * 默认直接执行 advance（其它调用方行为不变）；播放页借这个口子先播
+         * 和「点下一首」一样的甩盘动画，动画到位后才真正换曲。
+         */
+        fun onAutoAdvance(advance: () -> Unit) {
+            advance()
+        }
 
         /**
          * 整首歌词的时间轴换了（新歌、或刚刮削成功）。
@@ -227,6 +242,7 @@ class Player(private val ctx: Context) {
         listener?.onTrack(t, playlist.index)
         listener?.onState(false)
         listener?.onLyric(null)
+        listener?.onNextLyric(null)
 
         val url = Music.audioUrl(baseUrl, t.path)
         val p = MediaPlayer()
@@ -263,8 +279,15 @@ class Player(private val ctx: Context) {
             }
             p.setOnCompletionListener {
                 listener?.onState(false)
-                val again = playlist.onEnded()
-                if (again != null) playCurrent() else listener?.onEnded()
+                // 不再在这里直接 playCurrent：把切换动作交给 UI，
+                // 让它有机会先播甩盘动画。单曲循环/顺序到底也走同一条路。
+                val advance: () -> Unit = {
+                    val again = playlist.onEnded()
+                    if (again != null) playCurrent() else listener?.onEnded()
+                    Unit
+                }
+                val l = listener
+                if (l == null) advance() else l.onAutoAdvance(advance)
             }
             p.setOnErrorListener { _, _, _ ->
                 listener?.onState(false)
@@ -327,6 +350,9 @@ class Player(private val ctx: Context) {
         if (idx == lastLyricIdx) return
         lastLyricIdx = idx
         listener?.onLyric(if (idx < 0) null else lrc[idx][1] as String)
+        // 下一句一起送出去：合并按钮行省出来的高度正好放它，玩家能提前看到还没唱的词
+        val ni = idx + 1
+        listener?.onNextLyric(if (ni >= 0 && ni < lrc.size) lrc[ni][1] as String else null)
     }
 
     companion object {

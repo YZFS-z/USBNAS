@@ -277,6 +277,9 @@ class DiscView(ctx: Context) : View(ctx) {
     /** 切歌动画是否还在跑（父容器据此决定要不要继续排帧） */
     fun isAnimating(): Boolean = switching || flip < 1f || armMoving()
 
+    /** 甩盘切歌是否正在进行；spinSwitch 在跑动画时会忽略新请求，调用方据此决定是否立刻换曲 */
+    fun isSwitching(): Boolean = switching
+
     /**
      * 让封面按当前盘半径重裁一次。
      *
