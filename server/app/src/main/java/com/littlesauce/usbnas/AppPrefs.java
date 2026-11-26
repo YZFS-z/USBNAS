@@ -30,6 +30,8 @@ public final class AppPrefs {
     /** 上次检查更新的 wall clock 毫秒 */
     private static final String KEY_LAST_UPDATE_CHECK = "last_update_check";
     private static final String KEY_THEME = "theme";
+    /** 运行环境自检是否已经全部通过。只在全绿时写 true，之后不再弹自检窗。 */
+    private static final String KEY_SELF_CHECK_DONE = "self_check_done";
     /**
      * 登录会话的落盘快照。
      *
@@ -433,5 +435,16 @@ public final class AppPrefs {
             }
         }
         sp(c).edit().putString(KEY_SESSIONS, sb.toString()).apply();
+    }
+
+    // ---------- 首次启动自检 ----------
+
+    /** 自检是否已经全绿过；只要还有一项没过就不写，下次启动继续提醒 */
+    public static boolean selfCheckDone(Context c) {
+        return sp(c).getBoolean(KEY_SELF_CHECK_DONE, false);
+    }
+
+    public static void setSelfCheckDone(Context c) {
+        sp(c).edit().putBoolean(KEY_SELF_CHECK_DONE, true).apply();
     }
 }

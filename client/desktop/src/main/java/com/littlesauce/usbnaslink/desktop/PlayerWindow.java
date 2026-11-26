@@ -222,6 +222,7 @@ final class PlayerWindow extends JFrame {
             if (lyricBox.isSelected()) lyrics.setVisible(true);
             else lyrics.setVisible(false);
         });
+        installShortcuts();
 
         // 歌词位移：每次 ±0.5 秒，浮窗与窗口内歌词读的是同一份偏移
         earlier.addActionListener(e -> bumpOffset(-500));
@@ -237,6 +238,30 @@ final class PlayerWindow extends JFrame {
 
         ticker = new Timer(200, e -> onTick());
         ticker.setRepeats(true);
+    }
+
+    /**
+     * 键盘快捷键：空格播放/暂停，左右方向上/下一曲，媒体键同理。
+     * 用 WHEN_IN_FOCUSED_WINDOW 绑在 root pane 上，焦点落在歌词表或按钮上也能生效。
+     */
+    private void installShortcuts() {
+        JRootPane rp = getRootPane();
+        bind(rp, KeyStroke.getKeyStroke("SPACE"), playBtn);
+        bind(rp, KeyStroke.getKeyStroke("LEFT"), prevBtn);
+        bind(rp, KeyStroke.getKeyStroke("RIGHT"), nextBtn);
+        // JDK 17 的 java.awt.event.KeyEvent 没有 VK_MEDIA_* 常量，
+        // 桌面端就靠空格 + 左右键，和网页/手机端的核心手势保持一致。
+    }
+
+    private void bind(JRootPane rp, KeyStroke ks, JButton btn) {
+        final String key = "shortcut-" + ks.toString();
+        rp.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(ks, key);
+        rp.getActionMap().put(key, new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                btn.doClick();
+            }
+        });
     }
 
     /** 歌词位移：正数 = 歌词往后推（字幕变慢），负数 = 提前。 */

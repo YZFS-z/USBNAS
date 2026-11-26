@@ -283,6 +283,11 @@ class MainActivity : AppCompatActivity() {
         mainHandler.postDelayed(shiftTick, SHIFT_MS)
         // 从后台/锁屏回来，系统会把状态栏放回去，这里补收一次
         hideSystemBars()
+        // 自检晚一点弹，先让通知权限申请走完，别两个系统弹窗叠在一起
+        if (!selfCheckShownThisSession && !AppPrefs.selfCheckDone(this)) {
+            selfCheckShownThisSession = true
+            mainHandler.postDelayed({ maybeShowSelfCheck() }, 900)
+        }
     }
 
     /** 首页那个「自动更新」按钮上的字：显示开关状态 + 上次检查时间 */
@@ -1685,6 +1690,100 @@ class MainActivity : AppCompatActivity() {
             )
         }
     }
+
+    // ------------------------------------------------------------ 首次启动自检
+
+    /** 自检项：label 显示名，ok 是否满足，fix 是未满足时告诉用户去哪改 */
+    private data class EnvCheck(val label: String, val ok: Boolean, val fix: String)
+
+    /**
+     * 自检只查「跑起来必需的条件」，不查 root 之类的可选项：
+     * 文件权限决定能不能看到 U 盘，通知/白名单决定服务能不能长期活着，
+     * 网络地址决定客户端连不连得上，存储目录决定有没有内容可共享。
+     */
+    private fun environmentChecks(): List<EnvCheck> {
+        val storageOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+        val notifyOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
+        val batteryOk = (getSystemService(POWER_SERVICE) as PowerManager)
+                .isIgnoringBatteryOptimizations(packageName)
+        return listOf(
+            EnvCheck("全部文件访问权限", storageOk,
+                "首页点「文件权限」，允许管理所有文件；否则看不到 U 盘和内置存储"),
+            EnvCheck("通知权限", notifyOk,
+                "允许通知，否则前台服务的通知看不见，进程更容易被系统回收"),
+            EnvCheck("省电白名单", batteryOk,
+                "首页点「省电白名单」，避免锁屏后服务被冻结"),
+            EnvCheck("本机网络地址", NetUtils.bestIp(this) != null,
+                "连上 Wi-Fi 或开热点，客户端才知道访问哪个地址"),
+            EnvCheck("可共享存储目录", StorageUtils.listRoots(this).isNotEmpty(),
+                "插上 U 盘或确认内置存储可读；没有盘服务能起但没有内容")
+        )
+    }
+
+    /** 全绿才写标记；只要还有一项没过，下次启动继续弹，直到修好为止 */
+    private fun maybeShowSelfCheck() {
+        if (AppPrefs.selfCheckDone(this)) return
+        val items = environmentChecks()
+        val allOk = items.all { it.ok }
+        if (allOk) AppPrefs.setSelfCheckDone(this)
+        val text = buildString {
+            append("首次启动会检查这台设备的运行条件；全部通过后以后不再提示。\n\n")
+            for (it in items) {
+                append(if (it.ok) "✔ " else "✘ ").append(it.label).append('\n')
+                if (!it.ok) append("   ").append(it.fix).append('\n')
+            }
+        }
+        val builder = AlertDialog.Builder(this)
+            .setTitle(if (allOk) "运行环境自检通过" else "运行环境自检")
+            .setMessage(text)
+            .setNegativeButton("知道了", null)
+        if (!allOk) {
+            builder.setNeutralButton("去开文件权限") { _, _ -> requestStorage() }
+            builder.setPositiveButton("重新检查") { _, _ ->
+                val again = environmentChecks()
+                if (again.all { it.ok }) {
+                    AppPrefs.setSelfCheckDone(this)
+                    Toast.makeText(this, "全部通过，下次不再提示", Toast.LENGTH_SHORT).show()
+                } else {
+                    showSelfCheckDialog()
+                }
+            }
+        }
+        builder.show()
+    }
+
+    /** 「重新检查」后还有没过的项，用最新结果再弹一次 */
+    private fun showSelfCheckDialog() {
+        val items = environmentChecks()
+        if (items.all { it.ok }) {
+            AppPrefs.setSelfCheckDone(this)
+            Toast.makeText(this, "全部通过，下次不再提示", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val text = buildString {
+            append("还有条件没满足：\n\n")
+            for (it in items) {
+                append(if (it.ok) "✔ " else "✘ ").append(it.label).append('\n')
+                if (!it.ok) append("   ").append(it.fix).append('\n')
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("运行环境自检")
+            .setMessage(text)
+            .setNeutralButton("去开文件权限") { _, _ -> requestStorage() }
+            .setNegativeButton("知道了", null)
+            .setPositiveButton("重新检查") { _, _ -> showSelfCheckDialog() }
+            .show()
+    }
+
+    private var selfCheckShownThisSession = false
 
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -7813,6 +7813,34 @@ public class HttpServer {
         sb.append("<audio id='au' controls preload='metadata' src='").append(enc)
                 .append("'></audio>\n");
 
+        // 同目录的上一首/下一首，给键盘左右方向键用。只在音频之间走，
+        // 不把视频/文档混进来；按文件名排序和网页目录列表一致。
+        String prevUrl = "";
+        String nextUrl = "";
+        // parent 在面包屑那里已经取过了，这里直接复用
+        if (parent != null) {
+            File[] kids = parent.listFiles();
+            if (kids != null) {
+                List<File> auds = new ArrayList<>();
+                for (File k : kids) {
+                    if (k.isFile() && AUDIO_EXT.contains(extOf(k.getName()))) auds.add(k);
+                }
+                auds.sort(new java.util.Comparator<File>() {
+                    public int compare(File a, File b) {
+                        return a.getName().compareToIgnoreCase(b.getName());
+                    }
+                });
+                for (int i = 0; i < auds.size(); i++) {
+                    if (!auds.get(i).getAbsolutePath().equals(f.getAbsolutePath())) continue;
+                    if (i > 0) prevUrl = "/view?f=" + encode(auds.get(i - 1).getAbsolutePath());
+                    if (i < auds.size() - 1) nextUrl = "/view?f=" + encode(auds.get(i + 1).getAbsolutePath());
+                    break;
+                }
+            }
+        }
+        sb.append("<script>window.USBNAS_PREV=").append(jsStr(prevUrl))
+          .append(";window.USBNAS_NEXT=").append(jsStr(nextUrl)).append(";</script>\n");
+
         sb.append("<div class='lrcbar'><span id='lrcstat'>歌词加载中…</span>")
                 .append("<span class='lrcbtns'>")
                 .append("<button id='btnfind' class='mini'>").append(svgIcon("search","svgi-inline")).append(" 去网上找</button>")
@@ -9896,6 +9924,19 @@ public class HttpServer {
                     + "  });\n"
                     + "};\n"
                     + "if(au.readyState<1){au.load();}\n"
+                    + "/* 键盘快捷键：空格播放/暂停，左右切同目录上一首/下一首。\n"
+                    + "   焦点在歌词搜索框里时不拦，免得打不了字。 */\n"
+                    + "document.addEventListener('keydown',function(e){\n"
+                    + "  var t=e.target&&e.target.tagName;\n"
+                    + "  if(t==='INPUT'||t==='TEXTAREA'||(e.target&&e.target.isContentEditable))return;\n"
+                    + "  if(e.code==='Space'||e.key===' '){\n"
+                    + "    e.preventDefault();\n"
+                    + "    if(au.paused)au.play();else au.pause();\n"
+                    + "    return;\n"
+                    + "  }\n"
+                    + "  var u=e.key==='ArrowLeft'?window.USBNAS_PREV:(e.key==='ArrowRight'?window.USBNAS_NEXT:'');\n"
+                    + "  if(u){e.preventDefault();location.href=u;}\n"
+                    + "});\n"
                     + "\n"
                     + "/* ==================== 在线搜歌词 ====================\n"
                     + "   只在用户点按钮时查一次，绝不自动批量搜 —— 上千首的目录挨个查\n"

@@ -3,6 +3,7 @@ package com.littlesauce.usbnaslink
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -288,7 +289,10 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         lyricToolsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(2), dp(6), dp(2))
-            background = Palette.round(this@PlayerActivity, Palette.CARD, 12f, Palette.LINE, 1f)
+            // 日间 CARD(纯白) 和 BTN(#EDF0F4) 太接近，LINE(#E3E7EC) 又几乎看不见，
+            // 看起来像按钮直接贴在页面背景上。日间换个更实的描边，才算真的包住。
+            val border = if (Palette.mode == Palette.MODE_DAY) Palette.DIM2 else Palette.LINE
+            background = Palette.round(this@PlayerActivity, Palette.CARD, 12f, border, 1f)
         }
         lyricToolsCard.addView(toolsRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -421,6 +425,32 @@ class PlayerActivity : AppCompatActivity(), Player.Listener {
         super.onWindowFocusChanged(hasFocus)
         // 从桌面/通知栏/锁屏回来，系统会把状态栏还回来；重新拿焦点时再要一次
         if (hasFocus) Immersive.enter(this)
+    }
+
+    /**
+     * 外接键盘 / 蓝牙耳机按键：空格或媒体键播放暂停，左右方向键或媒体键上下曲。
+     * 用 dispatchKeyEvent 而不是 onKeyDown，因为焦点落在某个按钮上时 onKeyDown
+     * 会被按钮自己吃掉；这里拦在分发前，播放页又没有输入框，不会挡住打字。
+     */
+    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        if (e.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(e)
+        return when (e.keyCode) {
+            KeyEvent.KEYCODE_SPACE,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                player.toggle(); true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_NEXT,
+            KeyEvent.KEYCODE_PAGE_DOWN -> {
+                goSwitch(false); true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            KeyEvent.KEYCODE_PAGE_UP -> {
+                goSwitch(true); true
+            }
+            else -> super.dispatchKeyEvent(e)
+        }
     }
 
     /**
